@@ -50,6 +50,7 @@ Planner -> Local researcher (BM25 + BGE + RRF + rerank)
 - [实现状态](docs/IMPLEMENTATION_STATUS.md)
 - [优化路线](docs/OPTIMIZATION_ROADMAP.md)
 - [深度技术文档与面试拷打题](docs/TECHNICAL_DEEP_DIVE.md)
+- [Agent 独立架构、Function Calling 现状与 Claude Code 对比](docs/AGENT_ARCHITECTURE.md)
 
 ## 配置 DeepSeek
 
