@@ -1,0 +1,10 @@
+{"question":"导入相同内容的文件会发生什么？","reference_answer":"相同 SHA-256 内容会跳过重复解析。","evidence":"相同 SHA-256 内容跳过重复解析"}
+{"question":"扫描 PDF 什么时候需要人工抽查？","reference_answer":"OCR 置信度低于 0.85 时需要人工抽查。","evidence":"OCR 置信度低于 0.85 需要人工抽查"}
+{"question":"为什么同时使用 BM25 和向量检索？","reference_answer":"BM25 擅长精确术语，向量检索擅长语义相似表达，两者互补。","evidence":"BM25 适合精确术语、编号和错误码，向量检索适合语义相似表达"}
+{"question":"RRF 解决什么问题？","reference_answer":"RRF 避免直接比较不可比的原始分数。","evidence":"RRF）融合，因为它避免直接比较不可比的原始分数"}
+{"question":"重排服务不可用时怎么做？","reference_answer":"回退到融合排序并记录 degraded=true。","evidence":"重排服务不可用时回退到融合排序，并记录 degraded=true"}
+{"question":"引用校验失败后会怎样？","reference_answer":"最多重生成一次，再失败就返回证据摘要和失败状态。","evidence":"引用校验失败最多重生成一次；再次失败则返回证据摘要和失败状态"}
+{"question":"查询是否可以跨 library？","reference_answer":"不可以，查询不能跨 library。","evidence":"查询不能跨 library"}
+{"question":"上线前需要看哪些评测？","reference_answer":"需要看 Recall@K、MRR、答案忠实度、上下文精确度和不可回答问题拒答率。","evidence":"离线集同时测 Recall@K、MRR、答案忠实度、上下文精确度"}
+{"question":"指标下降多少时禁止上线？","reference_answer":"任一核心指标下降超过 5 个百分点时禁止上线。","evidence":"任一核心指标下降超过 5 个百分点禁止上线"}
+{"question":"这份手册规定了生产数据库备份保留年限吗？","reference_answer":"当前资料未找到依据。","evidence":""}

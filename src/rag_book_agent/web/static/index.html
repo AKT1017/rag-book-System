@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RAG Book Agent</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">RB</span><div><strong>RAG Book Agent</strong><small>LOCAL KNOWLEDGE WORKSPACE</small></div></div>
+      <div class="connection" id="connection">正在检查模型连接</div>
+    </header>
+    <main class="workspace">
+      <aside class="library-panel">
+        <div class="conversation-tools"><button id="new-session" type="button">＋ 新建对话</button></div>
+        <div class="session-heading">历史对话</div>
+        <div id="session-list" class="session-list"><div class="documents-empty">暂无历史对话</div></div>
+        <div class="panel-heading"><div><span class="section-kicker">LIBRARY</span><h2>资料库</h2></div><span class="stat" id="document-count">0 份资料</span></div>
+        <section class="upload-zone" id="drop-zone">
+          <input id="file-input" type="file" accept=".pdf,.md,.markdown,.txt" multiple hidden>
+          <div class="upload-symbol">↑</div>
+          <strong>拖入资料或点击上传</strong>
+          <span>PDF · Markdown · TXT</span>
+          <button id="choose-files" type="button">选择文件</button>
+        </section>
+        <div class="upload-result" id="upload-result">等待导入资料</div>
+        <div class="documents-toolbar"><span>已导入文档</span><span><button id="export-logs" type="button">↓ 导出日志</button> <button id="refresh-documents" type="button">↻ 刷新</button></span></div>
+        <div id="document-list" class="document-list"><div class="documents-empty">暂无导入文档</div></div>
+        <div class="library-summary">
+          <div><span>知识片段</span><strong id="chunk-count">0</strong></div>
+          <div><span>评测题</span><strong id="question-count">0</strong></div>
+        </div>
+      </aside>
+      <section class="chat-panel">
+        <div class="conversation" id="conversation">
+          <div class="welcome-message">
+            <p class="eyebrow">LOCAL KNOWLEDGE</p>
+            <h1>向你的资料提问</h1>
+            <p>回答只基于已导入内容，每项结论都保留可查看的证据来源。</p>
+          </div>
+        </div>
+        <form class="composer" id="ask-form">
+          <label class="agent-toggle"><input id="agent-mode" type="checkbox"> Agent 模式</label>
+          <textarea id="question" rows="1" placeholder="输入问题如：这本书怎样解释混合检索"></textarea>
+          <button class="send-button" type="submit" id="ask-button"><span>发送</span><span class="send-icon">↗</span></button>
+        </form>
+      </section>
+      <aside class="evidence-panel">
+        <div class="panel-heading"><div><span class="section-kicker">EVIDENCE</span><h2>引用证据</h2></div><span class="stat" id="answer-mode">等待提问</span></div>
+        <div class="retrieval-line"><span>检索链路</span><strong id="retrieval-mode">等待提问</strong></div>
+        <div id="sources" class="sources empty">回答后将在这里显示原文、页码和相关性。</div>
+      </aside>
+    </main>
+    <template id="source-template">
+      <article class="source-item">
+        <div class="source-meta"></div>
+        <div class="source-heading"></div>
+        <p class="source-text"></p>
+        <button class="source-toggle" type="button">显示全部</button>
+      </article>
+    </template>
+    <template id="document-template"><article class="document-item"><div class="document-row"><input class="library-toggle" type="checkbox"><div class="document-main"><strong class="document-title"></strong><span class="document-meta"></span></div><button class="document-delete" type="button" title="删除文档">删除</button></div><label class="document-enabled"><input class="enabled-toggle" type="checkbox"> 参与检索</label><button class="document-chunks" type="button">查看父子分块</button><div class="chunk-tree" hidden></div></article></template>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
