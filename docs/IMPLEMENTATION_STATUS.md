@@ -1,6 +1,6 @@
 # RAG Book Agent 当前技术栈与实施状态
 
-更新时间：2026-09-01  
+更新时间：2026-09-01（Agent 检索闭环版本）
 项目路径：`D:\work_pro\rag-book-agent`
 
 本文以当前代码和实际运行结果为准，区分“已经可用的实现”和设计文档中的后续目标。
@@ -16,15 +16,16 @@
 | 运行时 | Python 3.10+，当前环境 Python 3.13 | 已运行 |
 | Web 后端 | FastAPI + Uvicorn | 已运行 |
 | 前端 | 原生 HTML/CSS/JavaScript | 已运行 |
-| TUI | Textual + Rich | 已运行 |
-| PDF 解析 | pypdf 文本层提取 | 已运行 |
+| TUI | 已移除，保留 Web 前端 | 已完成 |
+| PDF 解析 | MarkItDown -> PyMuPDF -> pypdf 回退，支持常见加密 PDF | 已运行 |
 | Markdown/TXT | Python 标准库 UTF-8 读取 | 已运行 |
 | 稀疏检索 | SQLite FTS5/BM25 | 已运行 |
-| 稠密检索 | ChromaDB + 可配置 SentenceTransformer（默认 BGE-small；未配置时 HashEmbedding 回退） | 已接入 |
+| 稠密检索 | ChromaDB + BAAI/bge-small-zh-v1.5；模型不可用时 HashEmbedding 回退 | 已运行 |
 | 融合 | Reciprocal Rank Fusion，默认 `rrf_k=60` | 已运行 |
-| 重排 | 规则重排：词覆盖、标题覆盖、精确匹配 | 已运行 |
-| 生成 | DeepSeek OpenAI-compatible Chat Completions | 已接入 |
-| Web 检索 | 可配置 HTTP 搜索适配器；DeepSeek Chat 本身不提供 Web Search 工具 | 可选 |
+| 重排 | BAAI/bge-reranker-base cross-encoder；模型不可用时规则重排回退 | 已运行 |
+| 生成 | DeepSeek Responses API | 已运行 |
+| Web 检索 | DeepSeek 服务端 `web_search`（可选）与本地 DuckDuckGo fetch -> Playwright 回退 | 可选 |
+| Agent | Planner -> Researchers -> evidence deduplication -> DeepSeek synthesizer | 已运行 |
 | 无 API 降级 | 本地证据摘要模式 | 已运行 |
 | 存储 | SQLite + FTS5 | 已运行 |
 | 评测 | Recall/MRR 确定性评测 + RAGAS 0.2.15 | 已运行 |
@@ -42,25 +43,25 @@
 
 ### 3.2 分块
 
-`ChapterChunker` 按 Markdown 标题和段落切分，默认块大小 1800 字符、重叠 220 字符，并保留标题、页码和位置。PDF 当前每页视作一个逻辑页面。
+`ChapterChunker` 按 Markdown 标题和段落切分，默认父块 3600 字符、子块 900 字符，并保留标题、页码、位置、`parent_id` 和 `chunk_type`。子块参与稀疏/稠密检索，命中后展开父块作为生成上下文。PDF 当前每页视作一个逻辑页面。
 
-当前不足：没有 tokenizer 级 token 预算、父子 chunk、表格专用表示、原始/规范化/展示三套文本和 manifest 版本记录。
+当前不足：没有 tokenizer 级 token 预算、相邻父块动态合并、表格专用表示、原始/规范化/展示三套文本和 manifest 版本记录。旧文档必须重新导入才能获得父子结构。
 
 ### 3.3 索引与检索
 
-SQLite FTS5 负责 BM25 风格稀疏召回；HashEmbedding 负责确定性的轻量稠密相似度；两路结果使用 RRF 融合。中文问题会做少量中英术语扩展，例如“发布”扩展为 `publish/upload/release`，“打包”扩展为 `build/package/packaging`。
+SQLite FTS5 负责 BM25 风格稀疏召回；ChromaDB 使用本地 BGE-small-zh-v1.5 进行稠密检索；两路结果使用 RRF 融合，随后交由 BGE-reranker-base 重排。模型加载失败时才回退到 HashEmbedding 和规则重排。中文问题会做少量中英术语扩展，例如“发布”扩展为 `publish/upload/release`，“打包”扩展为 `build/package/packaging`。
 
-当前不足：HashEmbedding 不是语义模型，对长距离语义和多语言表达有限；没有 BGE-small、BGE-M3、hnswlib/Qdrant 等真正向量索引。术语扩展是人工规则，不是通用查询改写模型。
+当前不足：模型为轻量级中文 BGE，不是 BGE-M3 这类更大模型；术语扩展仍是人工规则，不是通用查询改写模型。查询路由是规则、锚点相似度和可选轻量 LLM 的三层架构，但尚未有系统化线上校准。
 
 ### 3.4 重排
 
-候选结果按问题词覆盖、标题词覆盖和精确短语命中进行规则重排；重排服务不可用时不会阻断系统，因为当前重排器本身是本地规则实现。
+候选结果优先由 BGE-reranker-base cross-encoder 重排；模型不可用时，按问题词覆盖、标题词覆盖和精确短语命中的规则重排作为降级方案。
 
-当前不足：尚未接入 BGE Reranker 或 cross-encoder，无法达到设计稿中模型级重排质量；没有邻接扩展、上下文压缩和多路候选 ablation。
+当前不足：没有邻接父块合并、上下文 token 预算、上下文压缩和完整多路候选 ablation。
 
 ### 3.5 生成与引用
 
-配置 `config.json` 指向 DeepSeek，密钥从 `.env` 的 `RAG_BOOK_API_KEY` 读取。提示词要求只依据证据回答，并使用 `[S1]` 形式引用；API 失败时回退为本地证据摘要。回答会记录 trace、来源 chunk 和耗时。
+配置 `config.json` 指向 DeepSeek Responses API，密钥从 `.env` 的 `RAG_BOOK_API_KEY` 读取。提示词要求依据本地证据回答，并使用 `[S1]` 形式引用；Agent 综合会区分网页补充 `[W1]`。API 失败时回退为检索证据摘要。回答会记录 trace、来源 chunk 和耗时。
 
 当前不足：DeepSeek 是远程 API，不是完全离线的本地开源模型；当前没有 Qwen GGUF/llama.cpp 本地生成后端。引用校验和失败后自动重生成尚未形成完整的强约束验证器，主要依赖提示词和来源展示。
 
@@ -114,4 +115,4 @@ Web 左侧可以查看文档标题、类型、大小、页数、chunk 数和导�
 
 ## 7. 结论
 
-当前版本已经可以在本机导入书籍和技术文档、管理文档、检索、调用 DeepSeek 回答并进行 RAGAS 测评。它的主要短板不是“没有 RAG 流程”，而是检索向量、重排、OCR、完全离线生成、权限隔离和生产运维仍处于增强阶段。
+当前版本已经可以在本机导入书籍和技术文档、管理文档、父子分块检索、调用 DeepSeek 回答、在 Agent 模式下进行受限多路研究，并进行 RAGAS 测评。它的主要短板不是“没有 RAG 或 Agent 流程”，而是 OCR、完全离线生成、父块上下文优化、引用自动校验、权限隔离和生产运维仍处于增强阶段。
