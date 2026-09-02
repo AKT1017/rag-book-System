@@ -82,6 +82,13 @@ class RagService:
 
         return AgentOrchestrator(self).run(question, session_id, force_web)
 
+    def ask_langgraph_agent(
+        self, question: str, session_id: str = "default", force_web: bool = False
+    ) -> Answer:
+        from rag_book_agent.agent.langgraph_workflow import LangGraphAgent
+
+        return LangGraphAgent(self).run(question, session_id, force_web)
+
     def ask_for_documents(self, question: str, document_ids: List[int]) -> Answer:
         return self._ask(question, document_ids)
 

@@ -40,12 +40,30 @@ button, textarea { font: inherit; }
 .connection { font-size: 13px; color: #c5d7d2; }
 .connection.connected { color: #97dfce; }
 .connection.warning { color: #f0c883; }
+.app-nav { display: flex; align-self: stretch; margin-right: auto; margin-left: 34px; }
+.app-nav-item { border: 0; border-bottom: 3px solid transparent; padding: 0 16px; background: transparent; color: #b6c8c4; cursor: pointer; font-size: 13px; }
+.app-nav-item:hover { color: #f7fbfa; }
+.app-nav-item.active { border-bottom-color: #e7b968; color: #f7fbfa; font-weight: 700; }
 
 .workspace { display: grid; grid-template-columns: 292px minmax(400px, 1fr) 330px; height: calc(100vh - 58px); }
 .library-panel, .evidence-panel { padding: 20px; background: var(--panel); }
 .library-panel { border-right: 1px solid var(--line); }
 .evidence-panel { border-left: 1px solid var(--line); overflow-y: auto; }
 .chat-panel { min-width: 0; display: flex; flex-direction: column; }
+.langgraph-page { min-width: 0; overflow-y: auto; padding: 32px clamp(24px, 5vw, 64px); background: #fbfcfb; }
+.langgraph-header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; max-width:980px; margin:0 auto 24px; }
+.langgraph-header h1 { margin:6px 0 8px; font-size:25px; }
+.langgraph-header p { max-width:620px; margin:0; color:var(--muted); line-height:1.65; }
+.langgraph-grid { display:grid; grid-template-columns:minmax(0, 1.5fr) minmax(220px, .8fr); gap:16px; max-width:980px; margin:0 auto 16px; }
+.graph-card { padding:16px; border:1px solid var(--line); background:#fff; box-shadow:var(--shadow); overflow:hidden; }
+.graph-card-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.graph-card-heading button { width:30px; height:28px; border:1px solid var(--line); background:#fff; color:var(--accent); cursor:pointer; }
+#langgraph-diagram { display:block; width:100%; min-height:180px; max-height:360px; object-fit:contain; object-position:left top; }
+.graph-caption { margin:10px 0 0; color:var(--muted); font-size:11px; line-height:1.5; }
+.langgraph-trace { min-height:180px; margin-top:12px; color:var(--muted); font-size:12px; line-height:1.65; white-space:pre-wrap; }
+.langgraph-answer { max-width:980px; min-height:130px; margin:0 auto; padding:18px; border:1px solid var(--line); background:#fff; }
+.langgraph-composer { display:flex; gap:10px; max-width:980px; margin:16px auto 0; }
+.langgraph-composer textarea { min-height:72px; }
 
 .panel-heading { display: flex; justify-content: space-between; align-items: end; font-size: 14px; font-weight: 700; margin-bottom: 16px; }
 .conversation-tools { margin-bottom: 12px; }
@@ -135,11 +153,14 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent
 @media (max-width: 980px) {
   .workspace { grid-template-columns: 230px minmax(360px, 1fr); }
   .evidence-panel { display: none; }
+  .langgraph-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 680px) {
   .topbar { padding: 0 14px; }
   .connection { max-width: 145px; text-align: right; }
+  .app-nav { margin-left: 10px; }
+  .app-nav-item { padding: 0 7px; font-size: 11px; }
   .workspace { display: flex; flex-direction: column; height: auto; min-height: calc(100vh - 58px); }
   .library-panel { border-right: 0; border-bottom: 1px solid var(--line); padding: 15px; }
   .upload-zone { min-height: 120px; }
@@ -147,4 +168,7 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent
   .conversation { padding: 26px 18px; }
   .welcome-message { margin-top: 25px; }
   .composer { padding: 12px 18px; }
+  .langgraph-page { padding:22px 18px; }
+  .langgraph-header { display:block; }
+  .langgraph-header .stat { display:block; margin-top:10px; }
 }

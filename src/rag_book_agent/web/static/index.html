@@ -9,6 +9,7 @@
   <body>
     <header class="topbar">
       <div class="brand"><span class="brand-mark">RB</span><div><strong>RAG Book Agent</strong><small>LOCAL KNOWLEDGE WORKSPACE</small></div></div>
+      <nav class="app-nav" aria-label="工作区切换"><button class="app-nav-item active" type="button" data-page="rag">知识问答</button><button class="app-nav-item" type="button" data-page="langgraph">LangGraph Agent</button></nav>
       <div class="connection" id="connection">正在检查模型连接</div>
     </header>
     <main class="workspace">
@@ -32,7 +33,7 @@
           <div><span>评测题</span><strong id="question-count">0</strong></div>
         </div>
       </aside>
-      <section class="chat-panel">
+      <section class="chat-panel" id="rag-page">
         <div class="conversation" id="conversation">
           <div class="welcome-message">
             <p class="eyebrow">LOCAL KNOWLEDGE</p>
@@ -45,6 +46,15 @@
           <textarea id="question" rows="1" placeholder="输入问题如：这本书怎样解释混合检索"></textarea>
           <button class="send-button" type="submit" id="ask-button"><span>发送</span><span class="send-icon">↗</span></button>
         </form>
+      </section>
+      <section class="langgraph-page" id="langgraph-page" hidden>
+        <div class="langgraph-header"><div><span class="section-kicker">EXPERIMENTAL WORKFLOW</span><h1>LangGraph Research Agent</h1><p>独立的受限研究图，复用现有本地 RAG、网页检索和 DeepSeek 综合。</p></div><span class="stat">最大 3 个子问题 · 受超时限制</span></div>
+        <div class="langgraph-grid">
+          <section class="graph-card"><div class="graph-card-heading"><strong>执行链路</strong><button id="refresh-langgraph" type="button" title="重新加载 LangGraph 官方图渲染">↻</button></div><img id="langgraph-diagram" alt="LangGraph 工作流图" src="/api/langgraph/diagram"><p class="graph-caption">图由 LangGraph 的 <code>get_graph().draw_mermaid_png()</code> 生成。</p></section>
+          <section class="graph-card"><strong>本次运行轨迹</strong><div id="langgraph-trace" class="langgraph-trace">输入问题后将显示实际节点执行结果。</div></section>
+        </div>
+        <section class="langgraph-answer message" id="langgraph-answer"><div class="message-label">LangGraph Agent 回答</div><div id="langgraph-result" class="answer-message">这里会显示独立工作流的 Markdown 回答。</div></section>
+        <form class="langgraph-composer" id="langgraph-form"><textarea id="langgraph-question" rows="2" placeholder="输入需要综合研究的问题"></textarea><button class="send-button" type="submit" id="langgraph-submit">运行图</button></form>
       </section>
       <aside class="evidence-panel">
         <div class="panel-heading"><div><span class="section-kicker">EVIDENCE</span><h2>引用证据</h2></div><span class="stat" id="answer-mode">等待提问</span></div>

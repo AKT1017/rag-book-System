@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -48,6 +48,7 @@ class AskRequest(BaseModel):
     session_id: str = "default"
     force_web: bool = False
     agent_mode: bool = False
+    agent_engine: str = "classic"
 
 
 class DocumentUpdate(BaseModel):
@@ -57,6 +58,14 @@ class DocumentUpdate(BaseModel):
 
 def new_service() -> RagService:
     return RagService(load_settings(PROJECT_DIR))
+
+
+def answer_for_request(service: RagService, request: AskRequest):
+    if request.agent_engine == "langgraph":
+        return service.ask_langgraph_agent(request.question.strip(), request.session_id, request.force_web)
+    if request.agent_mode:
+        return service.ask_agent(request.question.strip(), request.session_id, request.force_web)
+    return service.ask(request.question.strip(), request.session_id, request.force_web)
 
 
 @app.get("/")
@@ -81,6 +90,19 @@ def status() -> dict:
                 "mode": "deepseek" if api_configured and key_available else "evidence",
             },
         }
+    finally:
+        service.close()
+
+
+@app.get("/api/langgraph/diagram")
+def langgraph_diagram() -> Response:
+    service = new_service()
+    try:
+        from rag_book_agent.agent.langgraph_workflow import LangGraphAgent
+
+        return Response(content=LangGraphAgent(service).draw_png(), media_type="image/png")
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="LangGraph 图渲染失败：%s" % error)
     finally:
         service.close()
 
@@ -243,11 +265,7 @@ def ask(request: AskRequest) -> dict:
 
     service = new_service()
     try:
-        answer = (
-            service.ask_agent(question, request.session_id, request.force_web)
-            if request.agent_mode
-            else service.ask(question, request.session_id, request.force_web)
-        )
+        answer = answer_for_request(service, request)
         return {
             "answer": answer.text,
             "mode": answer.mode,
@@ -278,14 +296,10 @@ def ask_stream(request: AskRequest) -> StreamingResponse:
     def events():
         service = new_service()
         try:
-            if request.agent_mode:
+            if request.agent_mode or request.agent_engine == "langgraph":
                 yield json.dumps({"type": "progress", "stage": "planner", "text": "正在拆解问题并规划研究路径..."}, ensure_ascii=False) + "\n"
-                yield json.dumps({"type": "progress", "stage": "researcher", "text": "正在并行准备本地文档与网页证据..."}, ensure_ascii=False) + "\n"
-            answer = (
-                service.ask_agent(question, request.session_id, request.force_web)
-                if request.agent_mode
-                else service.ask(question, request.session_id, request.force_web)
-            )
+                yield json.dumps({"type": "progress", "stage": "researcher", "text": "正在准备本地文档与网页证据..."}, ensure_ascii=False) + "\n"
+            answer = answer_for_request(service, request)
             yield (
                 json.dumps(
                     {

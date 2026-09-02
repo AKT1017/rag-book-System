@@ -12,6 +12,13 @@ const documentList = document.getElementById("document-list");
 const documentTemplate = document.getElementById("document-template");
 const forceWeb = document.getElementById("force-web");
 const agentMode = document.getElementById("agent-mode");
+const langGraphForm = document.getElementById("langgraph-form");
+const langGraphQuestion = document.getElementById("langgraph-question");
+const langGraphSubmit = document.getElementById("langgraph-submit");
+const langGraphResult = document.getElementById("langgraph-result");
+const langGraphTrace = document.getElementById("langgraph-trace");
+const langGraphAnswer = document.getElementById("langgraph-answer");
+const langGraphDiagram = document.getElementById("langgraph-diagram");
 const memoryKey = "rag-book-session-id";
 const sessionId = localStorage.getItem(memoryKey) || crypto.randomUUID();
 localStorage.setItem(memoryKey, sessionId);
@@ -31,10 +38,33 @@ function renderRetrieval(info) {
   if (info.rerank) parts.push("重排");
   if (info.web_search) parts.push(info.web_search_mode === "forced" ? "Web Search · 强制" : "Web Search");
   if (info.agent) parts.push("Agent · " + (info.agent_roles || []).join(" / "));
+  if (info.agent_engine === "langgraph") parts.push("LangGraph 状态图");
   let label = parts.length ? parts.join("  ·  ") : "未获取检索信息";
   if (info.web_search_status === "deepseek-unavailable-no-api-key") label += "  ·  DeepSeek 未配置 API Key";
   if (info.web_search_status === "deepseek-request-failed-local-fallback") label += "  ·  DeepSeek 失败，已回退本地";
   setText("retrieval-mode", label);
+}
+
+function switchPage(page) {
+  const isGraph = page === "langgraph";
+  document.getElementById("rag-page").hidden = isGraph;
+  document.getElementById("langgraph-page").hidden = !isGraph;
+  document.querySelectorAll(".app-nav-item").forEach((button) => {
+    button.classList.toggle("active", button.dataset.page === page);
+  });
+  if (isGraph) langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`;
+}
+
+function renderLangGraphTrace(trace) {
+  if (!trace || !trace.length) {
+    langGraphTrace.textContent = "本次没有可展示的节点轨迹。";
+    return;
+  }
+  langGraphTrace.textContent = trace.map((item, index) => {
+    const name = item.node || "unknown";
+    const details = Object.entries(item).filter(([key]) => key !== "node").map(([key, value]) => `${key}=${value}`).join(" · ");
+    return `${index + 1}. ${name}${details ? `  ${details}` : ""}`;
+  }).join("\n");
 }
 
 async function loadStatus() {
@@ -256,6 +286,8 @@ document.getElementById("export-logs").addEventListener("click", () => {
   link.remove();
 });
 document.getElementById("new-session").addEventListener("click", newSession);
+document.querySelectorAll(".app-nav-item").forEach((button) => button.addEventListener("click", () => switchPage(button.dataset.page)));
+document.getElementById("refresh-langgraph").addEventListener("click", () => { langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`; });
 fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
 ["dragenter", "dragover"].forEach((eventName) => {
   dropZone.addEventListener(eventName, (event) => {
@@ -321,6 +353,37 @@ askForm.addEventListener("submit", async (event) => {
     askButton.disabled = false;
     askButton.textContent = "发送";
     questionInput.focus();
+  }
+});
+
+langGraphForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const question = langGraphQuestion.value.trim();
+  if (!question) return;
+  langGraphSubmit.disabled = true;
+  langGraphSubmit.textContent = "运行中";
+  langGraphResult.textContent = "LangGraph 正在依次执行计划、本地研究、网页研究、去重和综合节点...";
+  langGraphTrace.textContent = "图正在运行，等待节点结果...";
+  try {
+    const response = await fetch("/api/ask", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question, session_id: currentSessionId, agent_engine: "langgraph"}),
+    });
+    const data = await readJsonOrText(response);
+    if (!response.ok) throw new Error(data.detail || data.message || "LangGraph 运行失败");
+    langGraphResult.innerHTML = renderMarkdown(data.answer || "");
+    langGraphAnswer._sources = data.sources || [];
+    renderLangGraphTrace((data.retrieval || {}).agent_research || []);
+    renderRetrieval(data.retrieval || {});
+    setText("answer-mode", data.mode || "LangGraph");
+    renderSources(data.sources || []);
+  } catch (error) {
+    langGraphResult.textContent = `运行失败：${error.message}`;
+    langGraphTrace.textContent = "工作流未能完成，请查看服务端日志。";
+  } finally {
+    langGraphSubmit.disabled = false;
+    langGraphSubmit.textContent = "运行图";
   }
 });
 
