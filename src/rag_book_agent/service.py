@@ -79,9 +79,7 @@ class RagService:
     def ask_agent(
         self, question: str, session_id: str = "default", force_web: bool = False
     ) -> Answer:
-        from rag_book_agent.agent import AgentOrchestrator
-
-        return AgentOrchestrator(self).run(question, session_id, force_web)
+        return self.ask_langgraph_agent(question, session_id, force_web)
 
     def ask_langgraph_agent(
         self, question: str, session_id: str = "default", force_web: bool = False

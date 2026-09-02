@@ -1,10 +1,13 @@
 """A bounded LangGraph workflow that reuses the project's RAG tools."""
 
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from rag_book_agent.agent.orchestrator import AgentOrchestrator
+from rag_book_agent.agent.tools import AgentTools
 from rag_book_agent.models import Answer, SearchResult
 
 
@@ -24,7 +27,7 @@ class LangGraphAgent:
 
     def __init__(self, service):
         self.service = service
-        self.orchestrator = AgentOrchestrator(service)
+        self.tools = AgentTools(service)
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -43,14 +46,19 @@ class LangGraphAgent:
         return workflow.compile()
 
     def _plan(self, state: ResearchState) -> Dict:
-        plan = self.orchestrator.plan(state["question"])["sub_questions"]
+        parts = [item.strip(" ?。") for item in re.split(r"[，,；;]", state["question"]) if item.strip()]
+        plan = (parts or [state["question"]])[: self.service.settings.agent_max_react_steps]
         return {"plan": plan, "trace": [{"node": "plan", "sub_questions": len(plan)}]}
 
     def _local_research(self, state: ResearchState) -> Dict:
         results = []
         trace = list(state.get("trace", []))
         for question in state["plan"]:
-            found = self.orchestrator.tools.local_search(question)
+            try:
+                found = self.tools.local_search(question)
+            except Exception as error:
+                found = []
+                trace.append({"node": "local_research", "query": question, "error": str(error)[:160]})
             results.extend(found)
             trace.append({"node": "local_research", "query": question, "results": len(found)})
         return {"local_results": results, "trace": trace}
@@ -58,10 +66,21 @@ class LangGraphAgent:
     def _web_research(self, state: ResearchState) -> Dict:
         results = []
         trace = list(state.get("trace", []))
-        for question in state["plan"]:
-            found = self.orchestrator.tools.web_search(question)
-            results.extend(found)
-            trace.append({"node": "web_research", "query": question, "results": len(found)})
+        deadline = time.time() + self.service.settings.agent_timeout_seconds
+
+        def search(question):
+            return question, self.tools.web_search(question)
+
+        with ThreadPoolExecutor(max_workers=max(1, len(state["plan"]))) as pool:
+            futures = [pool.submit(search, question) for question in state["plan"]]
+            for future in as_completed(futures):
+                try:
+                    question, found = future.result(timeout=max(1, deadline - time.time()))
+                except Exception as error:
+                    trace.append({"node": "web_research", "error": str(error)[:160]})
+                    continue
+                results.extend(found)
+                trace.append({"node": "web_research", "query": question, "results": len(found)})
         return {"web_results": results, "trace": trace}
 
     @staticmethod
@@ -114,10 +133,12 @@ class LangGraphAgent:
         self.service.last_retrieval["agent"] = True
         self.service.last_retrieval["agent_engine"] = "langgraph"
         self.service.last_retrieval["agent_roles"] = ["planner", "researcher", "synthesizer"]
-        self.service.last_retrieval["agent_tools"] = list(self.orchestrator.tools.registry.keys())
+        self.service.last_retrieval["agent_tools"] = list(self.tools.registry.keys())
         self.service.last_retrieval["agent_sub_questions"] = state.get("plan", [])
         self.service.last_retrieval["agent_research"] = state.get("trace", [])
-        self.service.last_retrieval["agent_react_steps"] = len(state.get("plan", []))
+        self.service.last_retrieval["agent_react_steps"] = min(
+            len(state.get("plan", [])), self.service.settings.agent_max_react_steps
+        )
         self.service.last_retrieval["agent_web_provider"] = self.service.web_search.last_provider
         self.service.storage.add_trace_detail(self.service.last_trace_id, self.service.last_retrieval)
         from rag_book_agent.audit_log import OperationLog

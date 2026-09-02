@@ -29,18 +29,24 @@ python -m venv .venv
 - 多会话历史、每轮独立引用、操作日志 TXT 导出
 - 路线 Recall/MRR 与 RAGAS Faithfulness/Context Precision 评测
 
-## Agent 模式
+## LangGraph Agent 模式
 
-普通 RAG 适用于单一、可直接由本地资料回答的问题。开启 Agent 模式后，系统最多将问题拆为三个子问题，并按以下流程执行：
+普通 RAG 适用于单一、可直接由本地资料回答的问题。LangGraph Agent 是当前唯一的研究 Agent 实现，位于独立子页面；系统最多将问题拆为三个子问题，并按以下流程执行：
 
 ```text
-Planner -> Local researcher (BM25 + BGE + RRF + rerank)
+LangGraph Planner -> Local researcher (BM25 + BGE + RRF + rerank)
         -> Web researcher (fetch -> Playwright fallback)
         -> parent_id / URL deduplication
         -> DeepSeek synthesizer -> Markdown answer with citations
 ```
 
 本地 SQLite 检索保持单线程以保证连接安全；网页研究可并行。Agent 受 `agent_max_react_steps` 与 `agent_timeout_seconds` 限制。生成模型不可用、接口失败或只产生工具旁白时，系统会降级为带引用的检索证据摘要，而不会将内部错误展示给用户。
+
+重建本地示例知识库和黄金评测集：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\rebuild_demo_dataset.py
+```
 
 ## 文档导航
 

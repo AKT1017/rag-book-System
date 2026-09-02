@@ -11,7 +11,6 @@ const sourceTemplate = document.getElementById("source-template");
 const documentList = document.getElementById("document-list");
 const documentTemplate = document.getElementById("document-template");
 const forceWeb = document.getElementById("force-web");
-const agentMode = document.getElementById("agent-mode");
 const langGraphForm = document.getElementById("langgraph-form");
 const langGraphQuestion = document.getElementById("langgraph-question");
 const langGraphSubmit = document.getElementById("langgraph-submit");
@@ -318,10 +317,10 @@ askForm.addEventListener("submit", async (event) => {
     const response = await fetch("/api/ask/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, session_id: currentSessionId, force_web: forceWeb ? forceWeb.checked : false, agent_mode: agentMode.checked }),
+      body: JSON.stringify({ question, session_id: currentSessionId, force_web: forceWeb ? forceWeb.checked : false }),
     });
     if (!response.ok) throw new Error("问答失败");
-    const answerBody = addMessage(agentMode.checked ? "Agent 回答" : "DeepSeek 回答", "", "answer-message streaming");
+    const answerBody = addMessage("DeepSeek 回答", "", "answer-message streaming");
     const reader = response.body.getReader();
     const decoder = new TextDecoder(); let buffer = ""; let mode = "api";
     while (true) {
@@ -398,9 +397,11 @@ langGraphForm.addEventListener("submit", async (event) => {
 async function runEvaluation() {
   const method = document.getElementById("evaluation-method").value;
   const topK = Number(document.getElementById("evaluation-top-k").value);
+  const questionControl = document.getElementById("evaluation-max-questions");
+  const maxQuestions = questionControl ? Number(questionControl.value) : 0;
   const button = document.getElementById("run-evaluation"); button.disabled = true; button.textContent = "运行中";
   try {
-    const response = await fetch("/api/evaluations/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({method, top_k:topK})});
+    const response = await fetch("/api/evaluations/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({method, top_k:topK, max_questions:maxQuestions})});
     const data = await readJsonOrText(response); if (!response.ok) throw new Error(data.detail || "评测失败");
     renderEvaluation(data.method, data.report || {});
   } catch (error) { document.getElementById("evaluation-summary").innerHTML = `<div class="metric error-metric"><span>评测失败</span><strong>${escapeHtml(error.message)}</strong></div>`; }

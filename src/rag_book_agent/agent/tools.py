@@ -1,4 +1,4 @@
-"""Small, auditable tools exposed to the agent orchestrator."""
+"""Small, auditable tools exposed to the LangGraph research workflow."""
 
 import ast
 import operator

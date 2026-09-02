@@ -47,7 +47,7 @@ class AskRequest(BaseModel):
     question: str
     session_id: str = "default"
     force_web: bool = False
-    agent_mode: bool = False
+    agent_mode: bool = False  # compatibility: true now selects LangGraph
     agent_engine: str = "classic"
 
 
@@ -59,6 +59,7 @@ class DocumentUpdate(BaseModel):
 class EvaluationRequest(BaseModel):
     method: str = "retrieval"
     top_k: int = 10
+    max_questions: int = 0
 
 
 def new_service() -> RagService:
@@ -66,10 +67,8 @@ def new_service() -> RagService:
 
 
 def answer_for_request(service: RagService, request: AskRequest):
-    if request.agent_engine == "langgraph":
+    if request.agent_engine == "langgraph" or request.agent_mode:
         return service.ask_langgraph_agent(request.question.strip(), request.session_id, request.force_web)
-    if request.agent_mode:
-        return service.ask_agent(request.question.strip(), request.session_id, request.force_web)
     return service.ask(request.question.strip(), request.session_id, request.force_web)
 
 
@@ -153,7 +152,8 @@ def run_evaluation(request: EvaluationRequest) -> dict:
     service = new_service()
     try:
         top_k = max(1, min(request.top_k, 20))
-        report = Evaluator(service.storage, service.retriever).run(top_k=top_k, max_questions=5)
+        max_questions = request.max_questions if request.max_questions > 0 else None
+        report = Evaluator(service.storage, service.retriever).run(top_k=top_k, max_questions=max_questions)
         Evaluator.save(report, PROJECT_DIR / "data" / "reports" / "retrieval-latest.json")
         return {"method": "retrieval", "cached": False, "report": report}
     finally:

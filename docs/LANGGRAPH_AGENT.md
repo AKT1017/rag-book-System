@@ -1,6 +1,6 @@
 # LangGraph Agent 使用说明
 
-当前版本在原有知识问答页面旁边增加了独立的 `LangGraph Agent` 子页面。它与经典 Agent 入口互不替换，可以在顶部导航直接切换。
+当前版本在原有知识问答页面旁边提供独立的 `LangGraph Agent` 子页面。LangGraph 已合并并替代旧经典 Agent，成为唯一的研究 Agent 实现，可以在顶部导航直接切换。
 
 ## 已接入的最小流程
 
@@ -53,4 +53,4 @@ GET /api/langgraph/diagram
 
 ## 当前边界
 
-这是独立的线性状态图，用于先把 LangGraph 流程跑通。当前没有替换经典 Agent，也没有启用模型自主 Function Calling、多轮 ReAct 或检查点恢复。后续可在 `synthesize` 前增加 `evidence_judge` 条件节点，再将工具选择升级为受限的 LLM tool call 循环。
+这是受限的线性状态图，目前没有启用模型自主 Function Calling、多轮 ReAct 或检查点恢复。后续可在 `synthesize` 前增加 `evidence_judge` 条件节点，再将工具选择升级为受限的 LLM tool call 循环。

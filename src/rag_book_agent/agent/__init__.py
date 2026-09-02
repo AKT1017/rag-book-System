@@ -1,5 +1,5 @@
-"""Optional multi-agent orchestration layer."""
+"""Bounded LangGraph research agent and its reusable tools."""
 
-from rag_book_agent.agent.orchestrator import AgentOrchestrator
+from rag_book_agent.agent.langgraph_workflow import LangGraphAgent
 
-__all__ = ["AgentOrchestrator"]
+__all__ = ["LangGraphAgent"]
