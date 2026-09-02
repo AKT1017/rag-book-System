@@ -98,6 +98,19 @@ class LangGraphAgent:
 
     def run(self, question: str, session_id: str = "default", force_web: bool = False) -> Answer:
         state = self.graph.invoke({"question": question, "session_id": session_id, "force_web": force_web})
+        self._record_final_state(state)
+        return state["answer"]
+
+    def stream(self, question: str, session_id: str = "default", force_web: bool = False):
+        """Yield actual LangGraph node updates for the web UI."""
+        state = {"question": question, "session_id": session_id, "force_web": force_web}
+        for update in self.graph.stream(state, stream_mode="updates"):
+            node, delta = next(iter(update.items()))
+            state.update(delta)
+            yield node, delta
+        self._record_final_state(state)
+
+    def _record_final_state(self, state: ResearchState) -> None:
         self.service.last_retrieval["agent"] = True
         self.service.last_retrieval["agent_engine"] = "langgraph"
         self.service.last_retrieval["agent_roles"] = ["planner", "researcher", "synthesizer"]
@@ -106,7 +119,11 @@ class LangGraphAgent:
         self.service.last_retrieval["agent_research"] = state.get("trace", [])
         self.service.last_retrieval["agent_react_steps"] = len(state.get("plan", []))
         self.service.last_retrieval["agent_web_provider"] = self.service.web_search.last_provider
-        return state["answer"]
+        self.service.storage.add_trace_detail(self.service.last_trace_id, self.service.last_retrieval)
+        from rag_book_agent.audit_log import OperationLog
+        OperationLog(self.service.settings.database_path.parent.parent).write(
+            "LANGGRAPH_TRACE", "%s | %s" % (state["question"], self.service.last_retrieval)
+        )
 
     def draw_png(self) -> bytes:
         """Use LangGraph's official graph renderer for the UI diagram."""

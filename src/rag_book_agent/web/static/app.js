@@ -46,13 +46,14 @@ function renderRetrieval(info) {
 }
 
 function switchPage(page) {
-  const isGraph = page === "langgraph";
-  document.getElementById("rag-page").hidden = isGraph;
-  document.getElementById("langgraph-page").hidden = !isGraph;
+  ["rag", "langgraph", "evaluation", "logs"].forEach((name) => {
+    document.getElementById(`${name}-page`).hidden = name !== page;
+  });
   document.querySelectorAll(".app-nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.page === page);
   });
-  if (isGraph) langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`;
+  if (page === "langgraph") langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`;
+  if (page === "logs") loadTraces();
 }
 
 function renderLangGraphTrace(trace) {
@@ -362,30 +363,66 @@ langGraphForm.addEventListener("submit", async (event) => {
   if (!question) return;
   langGraphSubmit.disabled = true;
   langGraphSubmit.textContent = "运行中";
-  langGraphResult.textContent = "LangGraph 正在依次执行计划、本地研究、网页研究、去重和综合节点...";
+  langGraphResult.textContent = "LangGraph 正在运行...";
   langGraphTrace.textContent = "图正在运行，等待节点结果...";
+  const nodes = [...document.querySelectorAll(".live-node")];
+  nodes.forEach((node) => node.className = "live-node");
+  document.getElementById("langgraph-live-status").textContent = "运行中";
   try {
-    const response = await fetch("/api/ask", {
+    const response = await fetch("/api/langgraph/run/stream", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({question, session_id: currentSessionId, agent_engine: "langgraph"}),
+      body: JSON.stringify({question, session_id: currentSessionId}),
     });
-    const data = await readJsonOrText(response);
-    if (!response.ok) throw new Error(data.detail || data.message || "LangGraph 运行失败");
-    langGraphResult.innerHTML = renderMarkdown(data.answer || "");
-    langGraphAnswer._sources = data.sources || [];
-    renderLangGraphTrace((data.retrieval || {}).agent_research || []);
-    renderRetrieval(data.retrieval || {});
-    setText("answer-mode", data.mode || "LangGraph");
-    renderSources(data.sources || []);
+    if (!response.ok) throw new Error("LangGraph 运行失败");
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; let traces = [];
+    while (true) {
+      const {value, done} = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, {stream:true}); const lines = buffer.split("\n"); buffer = lines.pop();
+      for (const line of lines) { if (!line) continue; const item = JSON.parse(line);
+        if (item.type === "node") { const active = document.querySelector(`.live-node[data-node="${item.node}"]`); if (active) { active.classList.add("done"); active.querySelector("small").textContent = Object.entries(item.update || {}).map(([k,v]) => `${k}: ${v}`).join(" · ") || "完成"; } traces.push({node:item.node, ...(item.update || {})}); renderLangGraphTrace(traces); }
+        if (item.type === "done") { langGraphResult.innerHTML = renderMarkdown(item.answer || ""); langGraphAnswer._sources = item.sources || []; renderRetrieval(item.retrieval || {}); setText("answer-mode", item.mode || "LangGraph"); renderSources(item.sources || []); document.getElementById("langgraph-live-status").textContent = "已完成"; }
+        if (item.type === "error") throw new Error(item.message || "LangGraph 失败");
+      }
+    }
   } catch (error) {
     langGraphResult.textContent = `运行失败：${error.message}`;
     langGraphTrace.textContent = "工作流未能完成，请查看服务端日志。";
+    document.getElementById("langgraph-live-status").textContent = "失败";
   } finally {
     langGraphSubmit.disabled = false;
     langGraphSubmit.textContent = "运行图";
   }
 });
+
+async function runEvaluation() {
+  const method = document.getElementById("evaluation-method").value;
+  const topK = Number(document.getElementById("evaluation-top-k").value);
+  const button = document.getElementById("run-evaluation"); button.disabled = true; button.textContent = "运行中";
+  try {
+    const response = await fetch("/api/evaluations/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({method, top_k:topK})});
+    const data = await readJsonOrText(response); if (!response.ok) throw new Error(data.detail || "评测失败");
+    renderEvaluation(data.method, data.report || {});
+  } catch (error) { document.getElementById("evaluation-summary").innerHTML = `<div class="metric error-metric"><span>评测失败</span><strong>${escapeHtml(error.message)}</strong></div>`; }
+  finally { button.disabled = false; button.textContent = "运行评测"; }
+}
+
+function renderEvaluation(method, report) {
+  const summary = document.getElementById("evaluation-summary"); const body = document.querySelector("#evaluation-table tbody");
+  if (method === "ragas") { const values = Object.entries(report).filter(([,v]) => typeof v === "number"); summary.innerHTML = values.map(([key,value]) => `<div class="metric"><span>${escapeHtml(key)}</span><strong>${Number(value).toFixed(3)}</strong></div>`).join("") || '<div class="metric"><span>RAGAS 报告</span><strong>已读取</strong></div>'; body.innerHTML = '<tr><td colspan="5">RAGAS 原始报告已读取；详细字段请查看 data/reports/ragas-latest.json。</td></tr>'; return; }
+  summary.innerHTML = `<div class="metric"><span>评测问题</span><strong>${report.question_count || 0}</strong></div><div class="metric"><span>Recall@${report.top_k}</span><strong>${report.recall_at_k ?? 0}</strong></div><div class="metric"><span>MRR@${report.top_k}</span><strong>${report.mrr_at_k ?? 0}</strong></div>`;
+  body.replaceChildren(); for (const row of report.details || []) { const tr=document.createElement("tr"); tr.innerHTML=`<td>${escapeHtml(row.question)}</td><td>${row.recall ?? "-"}</td><td>${row.reciprocal_rank ?? "-"}</td><td>${(row.found || []).join(", ") || "-"}</td><td>${row.evaluation === "refusal_only" ? "拒答题" : (row.recall > 0 ? "命中" : "未命中")}</td>`; body.append(tr); }
+}
+
+async function loadTraces() {
+  const box = document.getElementById("trace-list"); box.textContent = "正在加载日志...";
+  try { const response = await fetch("/api/traces"); const data = await response.json(); box.replaceChildren(); if (!data.traces.length) { box.textContent = "暂无结构化查询日志。先提交一次问题。"; return; }
+    for (const item of data.traces) { const detail=item.detail || {}; const retrieval=detail.retrieval_trace || {}; const card=document.createElement("details"); card.className="trace-card"; card.innerHTML=`<summary><span>${escapeHtml(item.question)}</span><small>${escapeHtml(item.mode)} · ${item.elapsed_ms} ms · ${item.created_at}</small></summary><div class="trace-summary"><span>路由：${detail.route_layer ?? "-"} / ${escapeHtml(detail.route_action || "-")}</span><span>候选：BM25 ${retrieval.candidate_counts?.bm25 ?? 0} · Dense ${retrieval.candidate_counts?.dense ?? 0} · Final ${retrieval.candidate_counts?.final ?? 0}</span><span>模型：${detail.sparse ? "BM25" : ""} ${detail.dense ? "BGE" : ""} ${detail.rrf ? "RRF" : ""} ${detail.rerank ? "Rerank" : ""}</span></div><pre>${escapeHtml(JSON.stringify(detail, null, 2))}</pre>`; box.append(card); }
+  } catch (error) { box.textContent = `日志加载失败：${error.message}`; }
+}
+
+document.getElementById("run-evaluation").addEventListener("click", runEvaluation);
+document.getElementById("refresh-traces").addEventListener("click", loadTraces);
 
 questionInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

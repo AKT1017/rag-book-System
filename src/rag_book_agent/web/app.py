@@ -56,6 +56,11 @@ class DocumentUpdate(BaseModel):
     in_library: bool = None
 
 
+class EvaluationRequest(BaseModel):
+    method: str = "retrieval"
+    top_k: int = 10
+
+
 def new_service() -> RagService:
     return RagService(load_settings(PROJECT_DIR))
 
@@ -118,6 +123,41 @@ def export_logs() -> FileResponse:
         media_type="text/plain; charset=utf-8",
         filename="rag-book-operations.txt",
     )
+
+
+@app.get("/api/traces")
+def traces(limit: int = 80) -> dict:
+    service = new_service()
+    try:
+        return {"traces": service.storage.list_trace_details(max(1, min(limit, 200)))}
+    finally:
+        service.close()
+
+
+@app.post("/api/evaluations/run")
+def run_evaluation(request: EvaluationRequest) -> dict:
+    if request.method == "ragas":
+        report_path = PROJECT_DIR / "data" / "reports" / "ragas-latest.json"
+        if not report_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail="尚无 RAGAS 报告。请按 docs/DEPLOYMENT.md 在独立 RAGAS 环境运行评测脚本。",
+            )
+        try:
+            return {"method": "ragas", "cached": True, "report": json.loads(report_path.read_text(encoding="utf-8"))}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="RAGAS 报告格式无效。")
+
+    from rag_book_agent.evaluation import Evaluator
+
+    service = new_service()
+    try:
+        top_k = max(1, min(request.top_k, 20))
+        report = Evaluator(service.storage, service.retriever).run(top_k=top_k, max_questions=5)
+        Evaluator.save(report, PROJECT_DIR / "data" / "reports" / "retrieval-latest.json")
+        return {"method": "retrieval", "cached": False, "report": report}
+    finally:
+        service.close()
 
 
 @app.post("/api/upload")
@@ -346,6 +386,50 @@ def ask_stream(request: AskRequest) -> StreamingResponse:
             service.close()
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+@app.post("/api/langgraph/run/stream")
+def run_langgraph_stream(request: AskRequest) -> StreamingResponse:
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+    def events():
+        service = new_service()
+        try:
+            from rag_book_agent.agent.langgraph_workflow import LangGraphAgent
+
+            agent = LangGraphAgent(service)
+            for node, update in agent.stream(question, request.session_id, request.force_web):
+                yield json.dumps({"type": "node", "node": node, "update": summarize_graph_update(update)}, ensure_ascii=False) + "\n"
+            answer = update["answer"]
+            yield json.dumps({"type": "done", "answer": answer.text, "mode": answer.mode, "retrieval": service.last_retrieval, "sources": serialize_sources(answer.sources)}, ensure_ascii=False) + "\n"
+        except Exception as error:
+            yield json.dumps({"type": "error", "message": str(error)[:300]}, ensure_ascii=False) + "\n"
+        finally:
+            service.close()
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+def summarize_graph_update(update: dict) -> dict:
+    if "plan" in update:
+        return {"sub_questions": len(update["plan"])}
+    if "local_results" in update:
+        return {"results": len(update["local_results"])}
+    if "web_results" in update:
+        return {"results": len(update["web_results"])}
+    if "answer" in update:
+        return {"mode": update["answer"].mode}
+    return {"events": len(update.get("trace", []))}
+
+
+def serialize_sources(items):
+    return [
+        {"id": source.chunk.id, "title": source.document_title, "page": source.chunk.page_start,
+         "heading": source.chunk.heading, "text": source.chunk.text, "score": round(source.rerank_score, 4)}
+        for source in items
+    ]
 
 
 def run() -> None:

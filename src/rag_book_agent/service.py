@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from rag_book_agent.chunking import ChapterChunker
+from rag_book_agent.audit_log import OperationLog
 from rag_book_agent.config import Settings
 from rag_book_agent.generation import AnswerGenerator
 from rag_book_agent.ingest import DocumentLoader
@@ -155,6 +156,7 @@ class RagService:
             "web_search_mode": (
                 "forced" if force_web else ("auto" if self.settings.deepseek_web_search else "off")
             ),
+            "retrieval_trace": self.retriever.last_trace,
         }
         saved_sources = [
             {
@@ -172,6 +174,10 @@ class RagService:
         source_ids = [item.chunk.id for item in answer.sources if item.chunk.id is not None]
         self.last_trace_id = self.storage.add_trace(
             question, answer.text, answer.mode, source_ids, elapsed_ms
+        )
+        self.storage.add_trace_detail(self.last_trace_id, self.last_retrieval)
+        OperationLog(self.settings.database_path.parent.parent).write(
+            "QUERY_TRACE", "%s | %s" % (question, self.last_retrieval)
         )
         return answer
 

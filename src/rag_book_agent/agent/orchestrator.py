@@ -42,6 +42,11 @@ class AgentOrchestrator:
             len(plan["sub_questions"]), self.service.settings.agent_max_react_steps
         )
         self.service.last_retrieval["agent_web_provider"] = self.service.web_search.last_provider
+        self.service.storage.add_trace_detail(self.service.last_trace_id, self.service.last_retrieval)
+        from rag_book_agent.audit_log import OperationLog
+        OperationLog(self.service.settings.database_path.parent.parent).write(
+            "AGENT_TRACE", "%s | %s" % (question, self.service.last_retrieval)
+        )
         return answer
 
     def plan(self, question: str) -> Dict[str, List[str]]:

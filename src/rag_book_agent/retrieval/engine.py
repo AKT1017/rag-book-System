@@ -90,6 +90,7 @@ class HybridRetriever:
         self.reranker = CrossEncoderReranker(storage.settings)
         self.query_processor = QuestionProcessor()
         self.vector_store = None
+        self.last_trace = {}
         try:
             self.vector_store = ChromaVectorStore(storage.settings)
         except (ImportError, RuntimeError, OSError):
@@ -148,7 +149,16 @@ class HybridRetriever:
             results.append(result)
 
         results.sort(key=lambda item: (item.rerank_score, item.fusion_score), reverse=True)
-        return results[:limit]
+        final = results[:limit]
+        self.last_trace = {
+            "query": question,
+            "retrieval_query": retrieval_question,
+            "candidate_counts": {"all_active_chunks": len(all_rows), "bm25": len(sparse_rows), "dense": len(dense_rows), "rrf": len(fused_ids), "final": len(final)},
+            "bm25_candidates": [int(row["id"]) for row in sparse_rows[:12]],
+            "dense_candidates": [{"id": int(row["id"]), "score": round(score, 4)} for row, score in dense_rows[:12]],
+            "reranked": [{"id": item.chunk.id, "parent_id": item.chunk.parent_id, "score": round(item.rerank_score, 4), "fusion": round(item.fusion_score, 4)} for item in final],
+        }
+        return final
 
     @staticmethod
     def _expand_query(question: str) -> str:

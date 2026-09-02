@@ -71,6 +71,11 @@ class Storage:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS trace_details (
+                trace_id INTEGER PRIMARY KEY REFERENCES traces(id) ON DELETE CASCADE,
+                detail_json TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS golden_questions (
                 id INTEGER PRIMARY KEY,
                 question TEXT NOT NULL UNIQUE,
@@ -281,6 +286,32 @@ class Storage:
             (trace_id, rating, note),
         )
         self.connection.commit()
+
+    def add_trace_detail(self, trace_id: int, detail: Dict) -> None:
+        self.connection.execute(
+            "INSERT OR REPLACE INTO trace_details(trace_id, detail_json) VALUES (?, ?)",
+            (trace_id, json.dumps(detail, ensure_ascii=False, default=str)),
+        )
+        self.connection.commit()
+
+    def list_trace_details(self, limit: int = 80) -> List[Dict]:
+        rows = self.connection.execute(
+            "SELECT traces.id, traces.question, traces.mode, traces.elapsed_ms, traces.created_at, "
+            "trace_details.detail_json FROM traces LEFT JOIN trace_details "
+            "ON traces.id = trace_details.trace_id ORDER BY traces.id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        output = []
+        for row in rows:
+            try:
+                detail = json.loads(row["detail_json"] or "{}")
+            except json.JSONDecodeError:
+                detail = {}
+            output.append({
+                "id": row["id"], "question": row["question"], "mode": row["mode"],
+                "elapsed_ms": row["elapsed_ms"], "created_at": row["created_at"], "detail": detail,
+            })
+        return output
 
     def add_golden_question(
         self, question: str, expected_chunk_ids: List[int], reference_answer: str = ""

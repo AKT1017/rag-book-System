@@ -11,8 +11,10 @@ class Evaluator:
         self.storage = storage
         self.retriever = retriever
 
-    def run(self, top_k: int = 10) -> Dict[str, object]:
+    def run(self, top_k: int = 10, max_questions: int = None) -> Dict[str, object]:
         rows = self.storage.list_golden_questions()
+        if max_questions:
+            rows = rows[:max_questions]
         details = []
         recall_total = 0.0
         reciprocal_rank_total = 0.0
@@ -60,6 +62,7 @@ class Evaluator:
             "recall_at_k": round(recall_total / count, 4) if count else 0.0,
             "mrr_at_k": round(reciprocal_rank_total / count, 4) if count else 0.0,
             "top_k": top_k,
+            "sampled": len(rows),
             "details": details,
         }
 
