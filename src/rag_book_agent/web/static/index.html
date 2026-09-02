@@ -12,20 +12,15 @@
       <nav class="app-nav" aria-label="工作区切换"><button class="app-nav-item active" type="button" data-page="rag">知识问答</button><button class="app-nav-item" type="button" data-page="langgraph">LangGraph Agent</button><button class="app-nav-item" type="button" data-page="evaluation">评测中心</button><button class="app-nav-item" type="button" data-page="logs">运行日志</button></nav>
       <div class="connection" id="connection">正在检查模型连接</div>
     </header>
-    <main class="workspace">
+    <main class="workspace show-evidence">
       <aside class="library-panel">
         <div class="conversation-tools"><button id="new-session" type="button">＋ 新建对话</button></div>
         <div class="session-heading">历史对话</div>
         <div id="session-list" class="session-list"><div class="documents-empty">暂无历史对话</div></div>
         <div class="panel-heading"><div><span class="section-kicker">LIBRARY</span><h2>资料库</h2></div><span class="stat" id="document-count">0 份资料</span></div>
-        <section class="upload-zone" id="drop-zone">
-          <input id="file-input" type="file" accept=".pdf,.md,.markdown,.txt" multiple hidden>
-          <div class="upload-symbol">↑</div>
-          <strong>拖入资料或点击上传</strong>
-          <span>PDF · Markdown · TXT</span>
-          <button id="choose-files" type="button">选择文件</button>
-        </section>
+        <button class="upload-launch" id="open-upload" type="button">＋ 导入资料</button>
         <div class="upload-result" id="upload-result">等待导入资料</div>
+        <div class="import-progress" id="import-progress">暂无后台处理任务</div>
         <div class="documents-toolbar"><span>已导入文档</span><span><button id="export-logs" type="button">↓ 导出日志</button> <button id="refresh-documents" type="button">↻ 刷新</button></span></div>
         <div id="document-list" class="document-list"><div class="documents-empty">暂无导入文档</div></div>
         <div class="library-summary">
@@ -73,6 +68,7 @@
       </article>
     </template>
     <template id="document-template"><article class="document-item"><div class="document-row"><input class="library-toggle" type="checkbox"><div class="document-main"><strong class="document-title"></strong><span class="document-meta"></span></div><button class="document-delete" type="button" title="删除文档">删除</button></div><label class="document-enabled"><input class="enabled-toggle" type="checkbox"> 参与检索</label><button class="document-chunks" type="button">查看父子分块</button><div class="chunk-tree" hidden></div></article></template>
+    <div class="upload-modal" id="upload-modal" hidden><div class="upload-dialog"><button class="upload-close" id="close-upload" type="button">×</button><span class="section-kicker">IMPORT</span><h2>导入资料</h2><section class="upload-zone" id="drop-zone"><input id="file-input" type="file" accept=".pdf,.md,.markdown,.txt,.docx,.xlsx,.xls,.pptx,.csv" multiple hidden><div class="upload-symbol">↑</div><strong>拖入文件或点击选择</strong><span>PDF · Word · Excel · PPT · CSV · Markdown · TXT</span><button id="choose-files" type="button">选择文件</button></section><div class="upload-job-list" id="upload-job-list"></div></div></div>
     <script src="/static/app.js"></script>
   </body>
 </html>

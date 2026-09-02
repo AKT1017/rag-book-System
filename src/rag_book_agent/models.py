@@ -6,6 +6,12 @@ from typing import List, Optional
 class Page:
     number: int
     text: str
+    parser: str = "native"
+    ocr_used: bool = False
+    ocr_confidence: float = 0.0
+    image_count: int = 0
+    table_count: int = 0
+    ocr_error: str = ""
 
 
 @dataclass

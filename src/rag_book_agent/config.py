@@ -31,6 +31,12 @@ class Settings:
     request_timeout: int = 90
     pdf_backend: str = "pymupdf"
     pdf_min_text_chars: int = 20
+    pdf_ocr_enabled: bool = True
+    pdf_ocr_engine: str = "rapidocr"
+    pdf_render_dpi: int = 220
+    pdf_keep_images: bool = False
+    pdf_formula_enabled: bool = True
+    pdf_table_enabled: bool = True
     parent_chunk_size: int = 3600
     child_chunk_size: int = 900
     agent_timeout_seconds: int = 45

@@ -1,5 +1,8 @@
 import json
 import time
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
 
@@ -16,8 +19,11 @@ from rag_book_agent.service import RagService
 
 PROJECT_DIR = project_directory()
 STATIC_DIR = Path(__file__).parent / "static"
-ALLOWED_EXTENSIONS = {".pdf", ".md", ".markdown", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".md", ".markdown", ".txt", ".docx", ".xlsx", ".xls", ".pptx", ".csv"}
 MAX_FILE_SIZE = 50 * 1024 * 1024
+IMPORT_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rag-import")
+IMPORT_JOBS = {}
+IMPORT_LOCK = threading.Lock()
 
 app = FastAPI(title="RAG Book Agent", version="0.1.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -135,6 +141,20 @@ def traces(limit: int = 80) -> dict:
 
 @app.post("/api/evaluations/run")
 def run_evaluation(request: EvaluationRequest) -> dict:
+    if request.method == "pdf_quality":
+        service = new_service()
+        try:
+            rows = service.storage.list_documents()
+            pdfs = [row for row in rows if row["file_type"] == "pdf"]
+            details = []
+            for row in pdfs:
+                chunks = service.storage.list_chunks([row["id"]], active_only=False)
+                text_chars = sum(len(item["text"]) for item in chunks)
+                details.append({"document": row["title"], "pages": row["page_count"], "chunks": len(chunks), "text_chars": text_chars, "quality_score": 1.0 if text_chars > 100 else 0.0})
+            average = sum(item["quality_score"] for item in details) / len(details) if details else 0.0
+            return {"method": "pdf_quality", "model": "轻量规则检查器", "documents": len(pdfs), "score": average, "details": details}
+        finally:
+            service.close()
     if request.method == "ragas":
         report_path = PROJECT_DIR / "data" / "reports" / "ragas-latest.json"
         if not report_path.exists():
@@ -172,8 +192,13 @@ async def upload(files: List[UploadFile] = File(...)) -> dict:
         extension = Path(safe_name).suffix.lower()
         if not safe_name or extension not in ALLOWED_EXTENSIONS:
             raise HTTPException(
-                status_code=400, detail="Only PDF, Markdown, and TXT are supported."
+                status_code=400, detail="支持 PDF、Markdown、TXT、Word、Excel、PPT 和 CSV。"
             )
+        if extension in {".docx", ".xlsx", ".xls", ".pptx"}:
+            signature = await uploaded.read(4)
+            await uploaded.seek(0)
+            if extension != ".xls" and signature != b"PK\\x03\\x04":
+                raise HTTPException(status_code=400, detail="Office 文件格式无效。")
 
         target = upload_dir / safe_name
         bytes_written = 0
@@ -190,24 +215,66 @@ async def upload(files: List[UploadFile] = File(...)) -> dict:
                 handle.write(block)
         saved_paths.append(target)
 
-    service = new_service()
-    try:
-        imported = {"found": 0, "imported": 0, "skipped": 0, "chunks": 0}
-        for path in saved_paths:
+    jobs = []
+    immediate = {"found": 0, "imported": 0, "skipped": 0, "chunks": 0}
+    for path in saved_paths:
+        if path.suffix.lower() in {".md", ".markdown", ".txt", ".csv"}:
+            service = new_service()
             try:
                 result = service.ingest(path)
-            except Exception as error:
-                # Do not leak a plain-text 500 response to the browser.
-                raise HTTPException(
-                    status_code=422,
-                    detail="无法解析文件 %s：%s。加密 PDF 请安装 cryptography 并提供可读取文件。"
-                    % (path.name, error),
-                )
-            for key in imported:
-                imported[key] += result[key]
-        return {"uploaded": [path.name for path in saved_paths], "import": imported}
+                for key in immediate:
+                    immediate[key] += result[key]
+            finally:
+                service.close()
+        else:
+            job_id = uuid.uuid4().hex[:12]
+            with IMPORT_LOCK:
+                IMPORT_JOBS[job_id] = {"id": job_id, "name": path.name, "status": "queued", "progress": 0, "message": "等待处理"}
+            IMPORT_EXECUTOR.submit(_run_import_job, job_id, path)
+            jobs.append(job_id)
+    return {"uploaded": [path.name for path in saved_paths], "import": immediate, "jobs": jobs}
+
+
+def _run_import_job(job_id: str, path: Path) -> None:
+    _update_import_job(job_id, status="processing", progress=8, message="正在解析文件")
+    service = new_service()
+    try:
+        _update_import_job(job_id, progress=35, message="正在提取文本、图片和表格")
+        result = service.ingest(path)
+        if result["chunks"] == 0 and result["imported"] > 0:
+            message = "处理完成，但未生成片段；请查看导入日志中的 IMPORT_WARN"
+            _update_import_job(job_id, status="warning", progress=100, message=message, result=result)
+            OperationLog(PROJECT_DIR).write("IMPORT_JOB_WARN", "file=%s | %s" % (path.name, message))
+        else:
+            _update_import_job(job_id, status="done", progress=100, message="处理完成", result=result)
+            OperationLog(PROJECT_DIR).write("IMPORT_JOB_DONE", "file=%s | %s" % (path.name, result))
+    except Exception as error:
+        message = "处理失败：%s" % str(error)[:240]
+        _update_import_job(job_id, status="error", progress=100, message=message)
+        OperationLog(PROJECT_DIR).write("IMPORT_JOB_ERROR", "file=%s | %s" % (path.name, message))
     finally:
         service.close()
+
+
+def _update_import_job(job_id: str, **values) -> None:
+    with IMPORT_LOCK:
+        if job_id in IMPORT_JOBS:
+            IMPORT_JOBS[job_id].update(values)
+
+
+@app.get("/api/import-jobs")
+def import_jobs() -> dict:
+    with IMPORT_LOCK:
+        return {"jobs": list(IMPORT_JOBS.values())[-50:]}
+
+
+@app.get("/api/import-jobs/{job_id}")
+def import_job(job_id: str) -> dict:
+    with IMPORT_LOCK:
+        job = IMPORT_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="导入任务不存在")
+    return job
 
 
 @app.get("/api/documents")

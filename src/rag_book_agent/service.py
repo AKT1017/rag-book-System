@@ -19,7 +19,7 @@ class RagService:
         self.settings = settings
         self.storage = Storage(settings.database_path)
         self.storage.settings = settings
-        self.loader = DocumentLoader()
+        self.loader = DocumentLoader(settings)
         self.chunker = ChapterChunker(
             settings.child_chunk_size, settings.chunk_overlap, settings.parent_chunk_size
         )
@@ -44,11 +44,26 @@ class RagService:
         chunks_added = 0
 
         for path in found:
-            document = self.loader.load(path)
+            started = time.perf_counter()
+            OperationLog(self.settings.database_path.parent.parent).write(
+                "IMPORT_START", "file=%s" % path.name
+            )
+            try:
+                document = self.loader.load(path)
+            except Exception as error:
+                OperationLog(self.settings.database_path.parent.parent).write(
+                    "IMPORT_ERROR", "file=%s | stage=load | error=%s" % (path.name, str(error)[:900])
+                )
+                raise
             if self.storage.document_is_current(document.path, document.content_hash):
+                OperationLog(self.settings.database_path.parent.parent).write(
+                    "IMPORT_SKIP", "file=%s | reason=unchanged" % path.name
+                )
                 skipped += 1
                 continue
             chunks = self.chunker.split(document)
+            parent_count = sum(1 for chunk in chunks if chunk.chunk_type == "parent")
+            child_count = sum(1 for chunk in chunks if chunk.chunk_type == "child")
             document_id = self.storage.replace_document(document, chunks)
             try:
                 from rag_book_agent.vector_store import ChromaVectorStore
@@ -59,7 +74,19 @@ class RagService:
             except (ImportError, RuntimeError, OSError):
                 pass
             imported += 1
-            chunks_added += sum(1 for chunk in chunks if chunk.chunk_type == "child")
+            chunks_added += child_count
+            ocr_pages = sum(1 for page in document.pages if page.ocr_used)
+            ocr_errors = [page.ocr_error for page in document.pages if page.ocr_error]
+            parser_names = sorted(set(page.parser for page in document.pages))
+            status = "IMPORT_WARN" if child_count == 0 else "IMPORT_DONE"
+            OperationLog(self.settings.database_path.parent.parent).write(
+                status,
+                "file=%s | pages=%d | parser=%s | ocr_pages=%d | parent_chunks=%d | child_chunks=%d | ocr_error=%s | elapsed_ms=%d"
+                % (
+                    path.name, len(document.pages), ",".join(parser_names), ocr_pages,
+                    parent_count, child_count, (ocr_errors[0][:500] if ocr_errors else ""), int((time.perf_counter() - started) * 1000),
+                ),
+            )
 
         return {
             "found": len(found),

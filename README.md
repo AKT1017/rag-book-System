@@ -17,7 +17,7 @@ python -m venv .venv
 
 ## 主要能力
 
-- PDF、Markdown、TXT 解析和章节感知切片
+- PDF、Markdown、TXT、Word、Excel、PPT、CSV 解析和章节感知切片
 - MarkItDown -> PyMuPDF -> pypdf 的 PDF 解析回退链，兼容常见加密 PDF
 - 父子分块：子块用于召回，父块用于生成上下文；同父块结果在 Agent 阶段去重
 - SQLite 元数据/FTS5 + ChromaDB 持久化向量

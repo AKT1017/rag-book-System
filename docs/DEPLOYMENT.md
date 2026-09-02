@@ -80,7 +80,7 @@ RAG_BOOK_API_KEY=sk-你的密钥
 .\.venv\Scripts\rag-book.exe stats
 ```
 
-Web 页面也支持拖拽上传。支持扩展名：`.pdf`、`.md`、`.markdown`、`.txt`。导入后可在页面中启用/禁用文档，以及选择是否纳入知识库。
+Web 页面也支持拖拽上传。支持扩展名：`.pdf`、`.md`、`.markdown`、`.txt`、`.docx`、`.xlsx`、`.xls`、`.pptx`、`.csv`。PDF、Word、Excel 和 PPT 会进入后台异步任务，页面可查看处理进度；导入后可在页面中启用/禁用文档，以及选择是否纳入知识库。
 
 PDF 导入会逐页保留页码，并按页面文本块的阅读顺序抽取内容；多栏文档通常比基础文本抽取更稳定。导入结果仍进入原有切分、ChromaDB、BM25、RRF 和重排管线，不需要额外迁移。
 

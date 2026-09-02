@@ -1,6 +1,8 @@
 const fileInput = document.getElementById("file-input");
 const chooseFiles = document.getElementById("choose-files");
 const dropZone = document.getElementById("drop-zone");
+const uploadModal = document.getElementById("upload-modal");
+const uploadJobList = document.getElementById("upload-job-list");
 const uploadResult = document.getElementById("upload-result");
 const askForm = document.getElementById("ask-form");
 const questionInput = document.getElementById("question");
@@ -24,6 +26,14 @@ localStorage.setItem(memoryKey, sessionId);
 let currentSessionId = sessionId;
 const sessionList = document.getElementById("session-list");
 let progressNode = null;
+
+const evaluationMethod = document.getElementById("evaluation-method");
+if (evaluationMethod && !evaluationMethod.querySelector('option[value="pdf_quality"]')) {
+  const option = document.createElement("option");
+  option.value = "pdf_quality";
+  option.textContent = "PDF 处理质量 · 轻量检查";
+  evaluationMethod.insertBefore(option, evaluationMethod.lastElementChild);
+}
 
 function setText(id, value) {
   document.getElementById(id).textContent = value;
@@ -51,6 +61,7 @@ function switchPage(page) {
   document.querySelectorAll(".app-nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.page === page);
   });
+  document.querySelector(".workspace").classList.toggle("show-evidence", page === "rag" || page === "langgraph");
   if (page === "langgraph") langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`;
   if (page === "logs") loadTraces();
 }
@@ -254,18 +265,34 @@ async function uploadFiles(files) {
   if (!files.length) return;
   const data = new FormData();
   for (const file of files) data.append("files", file);
-  uploadResult.textContent = `正在导入 ${files.length} 个文件...`;
+  uploadResult.textContent = `已提交 ${files.length} 个文件`;
   try {
     const response = await fetch("/api/upload", { method: "POST", body: data });
     const result = await readJsonOrText(response);
     if (!response.ok) throw new Error(result.detail || result.message || String(result) || "导入失败");
-    const info = result.import;
-    uploadResult.textContent = `已导入 ${info.imported} 份资料，新增 ${info.chunks} 个片段，跳过 ${info.skipped} 份。`;
+    const info = result.import || {};
+    uploadResult.textContent = result.jobs && result.jobs.length ? `已提交 ${result.jobs.length} 个后台任务` : `已导入 ${info.imported || 0} 份资料`;
+    for (const job of result.jobs || []) watchImportJob(job);
     await loadStatus();
   } catch (error) {
     uploadResult.textContent = `导入失败：${error.message}`;
   } finally {
     fileInput.value = "";
+  }
+}
+
+async function watchImportJob(jobId) {
+  let done = false;
+  while (!done) {
+    const response = await fetch(`/api/import-jobs/${jobId}`);
+    if (!response.ok) return;
+    const job = await response.json();
+    let row = document.getElementById(`job-${job.id}`);
+    if (!row) { row = document.createElement("div"); row.id = `job-${job.id}`; row.className = "upload-job"; uploadJobList.prepend(row); }
+    row.innerHTML = `<div class="upload-job-line"><strong>${escapeHtml(job.name)}</strong><span>${escapeHtml(job.message || "")}</span></div><div class="progress-track"><i style="width:${job.progress || 0}%"></i></div>`;
+    done = ["done", "warning", "error"].includes(job.status);
+    if (done) { await loadStatus(); break; }
+    await new Promise((resolve) => setTimeout(resolve, 700));
   }
 }
 
@@ -276,6 +303,8 @@ async function readJsonOrText(response) {
 }
 
 chooseFiles.addEventListener("click", () => fileInput.click());
+document.getElementById("open-upload").addEventListener("click", () => { uploadModal.hidden = false; });
+document.getElementById("close-upload").addEventListener("click", () => { uploadModal.hidden = true; });
 document.getElementById("refresh-documents").addEventListener("click", loadDocuments);
 document.getElementById("export-logs").addEventListener("click", () => {
   const link = document.createElement("a");
@@ -403,7 +432,7 @@ async function runEvaluation() {
   try {
     const response = await fetch("/api/evaluations/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({method, top_k:topK, max_questions:maxQuestions})});
     const data = await readJsonOrText(response); if (!response.ok) throw new Error(data.detail || "评测失败");
-    renderEvaluation(data.method, data.report || {});
+    renderEvaluation(data.method, data.report || data);
   } catch (error) { document.getElementById("evaluation-summary").innerHTML = `<div class="metric error-metric"><span>评测失败</span><strong>${escapeHtml(error.message)}</strong></div>`; }
   finally { button.disabled = false; button.textContent = "运行评测"; }
 }
@@ -423,6 +452,7 @@ if (evaluationControls && !document.getElementById("evaluation-max-questions")) 
 
 function renderEvaluation(method, report) {
   const summary = document.getElementById("evaluation-summary"); const body = document.querySelector("#evaluation-table tbody");
+  if (method === "pdf_quality") { summary.innerHTML = `<div class="metric"><span>PDF 文档</span><strong>${report.documents || 0}</strong></div><div class="metric"><span>平均质量分</span><strong>${Number(report.score || 0).toFixed(3)}</strong></div><div class="metric"><span>检查模型</span><strong>${escapeHtml(report.model || "规则")}</strong></div>`; body.innerHTML = (report.details || []).map((row) => `<tr><td>${escapeHtml(row.document)}</td><td>${row.pages}</td><td>${row.chunks}</td><td>${row.text_chars}</td><td>${row.quality_score > 0 ? "通过" : "需检查"}</td></tr>`).join("") || '<tr><td colspan="5">暂无 PDF 文档。</td></tr>'; return; }
   if (method === "ragas") { const values = Object.entries(report).filter(([,v]) => typeof v === "number"); summary.innerHTML = values.map(([key,value]) => `<div class="metric"><span>${escapeHtml(key)}</span><strong>${Number(value).toFixed(3)}</strong></div>`).join("") || '<div class="metric"><span>RAGAS 报告</span><strong>已读取</strong></div>'; body.innerHTML = '<tr><td colspan="5">RAGAS 原始报告已读取；详细字段请查看 data/reports/ragas-latest.json。</td></tr>'; return; }
   summary.innerHTML = `<div class="metric"><span>评测问题</span><strong>${report.question_count || 0}</strong></div><div class="metric"><span>Recall@${report.top_k}</span><strong>${report.recall_at_k ?? 0}</strong></div><div class="metric"><span>MRR@${report.top_k}</span><strong>${report.mrr_at_k ?? 0}</strong></div>`;
   body.replaceChildren(); for (const row of report.details || []) { const tr=document.createElement("tr"); tr.innerHTML=`<td>${escapeHtml(row.question)}</td><td>${row.recall ?? "-"}</td><td>${row.reciprocal_rank ?? "-"}</td><td>${(row.found || []).join(", ") || "-"}</td><td>${row.evaluation === "refusal_only" ? "拒答题" : (row.recall > 0 ? "命中" : "未命中")}</td>`; body.append(tr); }
