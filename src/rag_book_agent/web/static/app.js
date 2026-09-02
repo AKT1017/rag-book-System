@@ -408,6 +408,19 @@ async function runEvaluation() {
   finally { button.disabled = false; button.textContent = "运行评测"; }
 }
 
+// Keep the control available even when an older cached HTML shell is open.
+const evaluationControls = document.querySelector("#evaluation-page .tool-controls");
+if (evaluationControls && !document.getElementById("evaluation-max-questions")) {
+  const label = document.createElement("label");
+  label.textContent = "评测题量 ";
+  const select = document.createElement("select");
+  select.id = "evaluation-max-questions";
+  [["0", "全部题目"], ["5", "前 5 题"], ["10", "前 10 题"], ["50", "前 50 题"], ["100", "前 100 题"]].forEach(([value, text]) => {
+    const option = document.createElement("option"); option.value = value; option.textContent = text; select.append(option);
+  });
+  label.append(select); evaluationControls.insertBefore(label, document.getElementById("run-evaluation"));
+}
+
 function renderEvaluation(method, report) {
   const summary = document.getElementById("evaluation-summary"); const body = document.querySelector("#evaluation-table tbody");
   if (method === "ragas") { const values = Object.entries(report).filter(([,v]) => typeof v === "number"); summary.innerHTML = values.map(([key,value]) => `<div class="metric"><span>${escapeHtml(key)}</span><strong>${Number(value).toFixed(3)}</strong></div>`).join("") || '<div class="metric"><span>RAGAS 报告</span><strong>已读取</strong></div>'; body.innerHTML = '<tr><td colspan="5">RAGAS 原始报告已读取；详细字段请查看 data/reports/ragas-latest.json。</td></tr>'; return; }

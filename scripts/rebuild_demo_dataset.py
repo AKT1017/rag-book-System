@@ -27,23 +27,31 @@ def main() -> None:
     service = RagService(settings)
     try:
         imports = []
-        for path in (PROJECT_DIR / "samples" / "reference_handbook.md", PROJECT_DIR / "samples" / "rag_introduction.md"):
+        paths = [PROJECT_DIR / "samples" / "reference_handbook.md", PROJECT_DIR / "samples" / "rag_introduction.md"]
+        cmrc_doc = PROJECT_DIR / "samples" / "cmrc2018_eval" / "cmrc2018_contexts.md"
+        if cmrc_doc.exists():
+            paths.append(cmrc_doc)
+        for path in paths:
             imports.append(service.ingest(path))
 
-        questions_path = PROJECT_DIR / "samples" / "reference_questions.jsonl"
+        question_paths = [PROJECT_DIR / "samples" / "reference_questions.jsonl"]
+        cmrc_questions = PROJECT_DIR / "samples" / "cmrc2018_eval" / "questions.jsonl"
+        if cmrc_questions.exists():
+            question_paths.append(cmrc_questions)
         child_chunks = service.storage.list_chunks(active_only=True)
         added = 0
-        for line in questions_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            expected = [
-                int(chunk["id"])
-                for chunk in child_chunks
-                if row["evidence"] and row["evidence"] in chunk["text"]
-            ]
-            service.storage.add_golden_question(row["question"], expected, row["reference_answer"])
-            added += 1
+        for questions_path in question_paths:
+            for line in questions_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                expected = [
+                    int(chunk["id"])
+                    for chunk in child_chunks
+                    if row.get("evidence") and row["evidence"] in chunk["text"]
+                ]
+                service.storage.add_golden_question(row["question"], expected, row.get("reference_answer", ""))
+                added += 1
         print(json.dumps({"imports": imports, "golden_questions": added, "stats": service.stats()}, ensure_ascii=False, indent=2))
     finally:
         service.close()

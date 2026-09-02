@@ -7,6 +7,8 @@ __pycache__/
 .coverage
 htmlcov/
 data/
+samples/cmrc2018_train.json
+samples/cmrc2018_eval/
 models/
 *.egg-info/
 .env
