@@ -78,6 +78,34 @@ def test_evaluation_reports_recall_and_mrr(tmp_path):
         assert report["question_count"] == 1
         assert report["recall_at_k"] == 1.0
         assert report["mrr_at_k"] == 1.0
+        assert report["hit_rate_at_k"] == 1.0
+        assert report["ndcg_at_k"] == 1.0
+        assert report["latency_ms"]["p95"] >= 0
+    finally:
+        service.close()
+
+
+def test_evaluation_filters_dataset_and_compares_routes(tmp_path):
+    book = tmp_path / "eval.md"
+    book.write_text("# 检索\n\nBM25 和向量检索可以通过 RRF 融合。", encoding="utf-8")
+    service = make_service(tmp_path)
+    try:
+        service.ingest(book)
+        chunk_id = service.storage.list_chunks()[0]["id"]
+        service.storage.add_golden_question("什么可以通过 RRF 融合", [chunk_id], dataset="demo")
+        service.storage.add_golden_question("另一个集合的问题", [chunk_id], dataset="other")
+        report = Evaluator(service.storage, service.retriever).run(
+            top_k=5, dataset="demo", route="bm25"
+        )
+        comparison = Evaluator(service.storage, service.retriever).compare(
+            top_k=5, dataset="demo"
+        )
+        assert report["sampled"] == 1
+        assert report["dataset"] == "demo"
+        assert set(comparison["routes"]) == set(Evaluator.ROUTES)
+        assert service.storage.evaluation_datasets() == [
+            {"id": "demo", "count": 1}, {"id": "other", "count": 1}
+        ]
     finally:
         service.close()
 

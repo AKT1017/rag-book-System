@@ -80,7 +80,8 @@ class Storage:
                 id INTEGER PRIMARY KEY,
                 question TEXT NOT NULL UNIQUE,
                 reference_answer TEXT NOT NULL DEFAULT '',
-                expected_chunk_ids TEXT NOT NULL DEFAULT '[]'
+                expected_chunk_ids TEXT NOT NULL DEFAULT '[]',
+                dataset TEXT NOT NULL DEFAULT 'custom'
             );
             """
         )
@@ -93,11 +94,22 @@ class Storage:
             self.connection.execute(
                 "ALTER TABLE documents ADD COLUMN in_library INTEGER NOT NULL DEFAULT 1"
             )
-        chunk_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(chunks)")}
+        chunk_columns = {
+            row["name"] for row in self.connection.execute("PRAGMA table_info(chunks)")
+        }
         if "parent_id" not in chunk_columns:
             self.connection.execute("ALTER TABLE chunks ADD COLUMN parent_id INTEGER")
         if "chunk_type" not in chunk_columns:
-            self.connection.execute("ALTER TABLE chunks ADD COLUMN chunk_type TEXT NOT NULL DEFAULT 'child'")
+            self.connection.execute(
+                "ALTER TABLE chunks ADD COLUMN chunk_type TEXT NOT NULL DEFAULT 'child'"
+            )
+        golden_columns = {
+            row["name"] for row in self.connection.execute("PRAGMA table_info(golden_questions)")
+        }
+        if "dataset" not in golden_columns:
+            self.connection.execute(
+                "ALTER TABLE golden_questions ADD COLUMN dataset TEXT NOT NULL DEFAULT 'custom'"
+            )
         self.connection.commit()
 
     def list_documents(self) -> List[sqlite3.Row]:
@@ -175,7 +187,8 @@ class Storage:
         parent_ids = {}
         for chunk in pending:
             cursor.execute(
-                "INSERT INTO chunks(document_id, text, heading, page_start, page_end, position, chunk_type) "
+                "INSERT INTO chunks(document_id, text, heading, page_start, page_end, "
+                "position, chunk_type) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     document_id,
@@ -193,8 +206,14 @@ class Storage:
             else:
                 parent_id = parent_ids.get(chunk.parent_id)
                 if parent_id is not None:
-                    cursor.execute("UPDATE chunks SET parent_id = ? WHERE id = ?", (parent_id, chunk_id))
-                cursor.execute("INSERT INTO chunks_fts(rowid, text, heading) VALUES (?, ?, ?)", (chunk_id, chunk.text, chunk.heading))
+                    cursor.execute(
+                        "UPDATE chunks SET parent_id = ? WHERE id = ?",
+                        (parent_id, chunk_id),
+                    )
+                cursor.execute(
+                    "INSERT INTO chunks_fts(rowid, text, heading) VALUES (?, ?, ?)",
+                    (chunk_id, chunk.text, chunk.heading),
+                )
 
         self.connection.commit()
         return document_id
@@ -314,18 +333,30 @@ class Storage:
         return output
 
     def add_golden_question(
-        self, question: str, expected_chunk_ids: List[int], reference_answer: str = ""
+        self, question: str, expected_chunk_ids: List[int], reference_answer: str = "",
+        dataset: str = "custom",
     ) -> None:
         self.connection.execute(
-            "INSERT INTO golden_questions(question, reference_answer, expected_chunk_ids) "
-            "VALUES (?, ?, ?) ON CONFLICT(question) DO UPDATE SET "
+            "INSERT INTO golden_questions(question, reference_answer, expected_chunk_ids, dataset) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(question) DO UPDATE SET "
             "reference_answer=excluded.reference_answer, "
-            "expected_chunk_ids=excluded.expected_chunk_ids",
-            (question, reference_answer, json.dumps(expected_chunk_ids)),
+            "expected_chunk_ids=excluded.expected_chunk_ids, dataset=excluded.dataset",
+            (question, reference_answer, json.dumps(expected_chunk_ids), dataset),
         )
         self.connection.commit()
 
-    def list_golden_questions(self) -> List[sqlite3.Row]:
+    def list_golden_questions(self, dataset: str = "all") -> List[sqlite3.Row]:
+        if dataset and dataset != "all":
+            return list(self.connection.execute(
+                "SELECT * FROM golden_questions WHERE dataset = ? ORDER BY id", (dataset,)
+            ).fetchall())
         return list(
             self.connection.execute("SELECT * FROM golden_questions ORDER BY id").fetchall()
         )
+
+    def evaluation_datasets(self) -> List[Dict]:
+        rows = self.connection.execute(
+            "SELECT dataset, COUNT(*) AS count FROM golden_questions "
+            "GROUP BY dataset ORDER BY dataset"
+        ).fetchall()
+        return [{"id": row["dataset"], "count": row["count"]} for row in rows]

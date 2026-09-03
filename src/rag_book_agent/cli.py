@@ -45,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_parser = subparsers.add_parser("eval", help="Run retrieval evaluation")
     eval_parser.add_argument("--top-k", type=int, default=10)
+    eval_parser.add_argument("--dataset", default="all")
+    eval_parser.add_argument(
+        "--route", choices=("hybrid_rerank", "hybrid", "bm25", "dense"),
+        default="hybrid_rerank",
+    )
+    eval_parser.add_argument("--limit", type=int, default=0)
     eval_parser.add_argument("--output", default="data/reports/latest.json")
 
     subparsers.add_parser("web", help="Start the local web interface")
@@ -101,7 +107,9 @@ def main(argv=None) -> None:
             print("Evaluation question saved.")
         elif args.command == "eval":
             evaluator = Evaluator(service.storage, service.retriever)
-            report = evaluator.run(args.top_k)
+            report = evaluator.run(
+                args.top_k, args.limit or None, args.dataset, args.route
+            )
             output = Path(args.output)
             if not output.is_absolute():
                 output = home / output

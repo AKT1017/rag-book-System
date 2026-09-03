@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from rag_book_agent.cli import project_directory
 from rag_book_agent.audit_log import OperationLog
 from rag_book_agent.config import load_settings
+from rag_book_agent.evaluation import Evaluator
 from rag_book_agent.memory import ConversationMemory
 from rag_book_agent.service import RagService
 
@@ -66,6 +67,8 @@ class EvaluationRequest(BaseModel):
     method: str = "retrieval"
     top_k: int = 10
     max_questions: int = 0
+    dataset: str = "all"
+    route: str = "hybrid_rerank"
 
 
 def new_service() -> RagService:
@@ -167,15 +170,38 @@ def run_evaluation(request: EvaluationRequest) -> dict:
         except json.JSONDecodeError:
             raise HTTPException(status_code=422, detail="RAGAS 报告格式无效。")
 
-    from rag_book_agent.evaluation import Evaluator
-
     service = new_service()
     try:
         top_k = max(1, min(request.top_k, 20))
         max_questions = request.max_questions if request.max_questions > 0 else None
-        report = Evaluator(service.storage, service.retriever).run(top_k=top_k, max_questions=max_questions)
+        available = {item["id"] for item in service.storage.evaluation_datasets()}
+        if request.dataset != "all" and request.dataset not in available:
+            raise HTTPException(status_code=404, detail="评测数据集不存在或尚未构建。")
+        if request.method == "route_compare":
+            report = Evaluator(service.storage, service.retriever).compare(
+                top_k=top_k, max_questions=max_questions, dataset=request.dataset
+            )
+        else:
+            report = Evaluator(service.storage, service.retriever).run(
+                top_k=top_k, max_questions=max_questions,
+                dataset=request.dataset, route=request.route,
+            )
         Evaluator.save(report, PROJECT_DIR / "data" / "reports" / "retrieval-latest.json")
-        return {"method": "retrieval", "cached": False, "report": report}
+        return {"method": request.method, "cached": False, "report": report}
+    finally:
+        service.close()
+
+
+@app.get("/api/evaluations/datasets")
+def evaluation_datasets() -> dict:
+    service = new_service()
+    try:
+        datasets = service.storage.evaluation_datasets()
+        total = sum(item["count"] for item in datasets)
+        return {
+            "datasets": [{"id": "all", "count": total}] + datasets,
+            "routes": list(Evaluator.ROUTES),
+        }
     finally:
         service.close()
 

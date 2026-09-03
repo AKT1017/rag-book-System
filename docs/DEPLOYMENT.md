@@ -139,6 +139,15 @@ pymupdf4llm 作为首选转换层处理电子 PDF，并输出适合 RAG 的 Mark
 .\.venv\Scripts\rag-book.exe eval --top-k 10
 ```
 
+评测中心内置两组标签：`demo`（工程功能小样本）和 `cmrc2018`（300 道中文阅读理解检索题）。页面可选择 5、10、20、50、100、300 或全部题目，并选择以下路线：
+
+- `bm25`：仅稀疏关键词召回；
+- `dense`：仅 BGE 稠密召回；
+- `hybrid`：BM25 + Dense + RRF，不重排；
+- `hybrid_rerank`：完整混合检索 + BGE Cross-Encoder 重排。
+
+确定性报告包含 Recall@K、Precision@K、Hit Rate@K、MRR@K、nDCG@K，以及平均、P50、P95 查询延迟。选择“四路线消融对比”可在同一数据集和样本量上直接比较各路线。该评测不调用生成模型，适合频繁回归。
+
 RAGAS 使用独立环境，避免污染主服务：
 
 ```powershell

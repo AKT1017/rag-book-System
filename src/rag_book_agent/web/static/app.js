@@ -426,35 +426,31 @@ async function runEvaluation() {
   const topK = Number(document.getElementById("evaluation-top-k").value);
   const questionControl = document.getElementById("evaluation-max-questions");
   const maxQuestions = questionControl ? Number(questionControl.value) : 0;
+  const dataset = document.getElementById("evaluation-dataset").value;
+  const route = document.getElementById("evaluation-route").value;
   const button = document.getElementById("run-evaluation"); button.disabled = true; button.textContent = "运行中";
   try {
-    const response = await fetch("/api/evaluations/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({method, top_k:topK, max_questions:maxQuestions})});
+    const response = await fetch("/api/evaluations/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({method, top_k:topK, max_questions:maxQuestions, dataset, route})});
     const data = await readJsonOrText(response); if (!response.ok) throw new Error(data.detail || "评测失败");
     renderEvaluation(data.method, data.report || data);
   } catch (error) { document.getElementById("evaluation-summary").innerHTML = `<div class="metric error-metric"><span>评测失败</span><strong>${escapeHtml(error.message)}</strong></div>`; }
   finally { button.disabled = false; button.textContent = "运行评测"; }
 }
 
-// Keep the control available even when an older cached HTML shell is open.
-const evaluationControls = document.querySelector("#evaluation-page .tool-controls");
-if (evaluationControls && !document.getElementById("evaluation-max-questions")) {
-  const label = document.createElement("label");
-  label.textContent = "评测题量 ";
-  const select = document.createElement("select");
-  select.id = "evaluation-max-questions";
-  [["0", "全部题目"], ["5", "前 5 题"], ["10", "前 10 题"], ["50", "前 50 题"], ["100", "前 100 题"]].forEach(([value, text]) => {
-    const option = document.createElement("option"); option.value = value; option.textContent = text; select.append(option);
-  });
-  label.append(select); evaluationControls.insertBefore(label, document.getElementById("run-evaluation"));
-}
-
 function renderEvaluation(method, report) {
   const summary = document.getElementById("evaluation-summary"); const body = document.querySelector("#evaluation-table tbody");
   if (method === "pdf_quality") { summary.innerHTML = `<div class="metric"><span>PDF 文档</span><strong>${report.documents || 0}</strong></div><div class="metric"><span>平均质量分</span><strong>${Number(report.score || 0).toFixed(3)}</strong></div><div class="metric"><span>检查模型</span><strong>${escapeHtml(report.model || "规则")}</strong></div>`; body.innerHTML = (report.details || []).map((row) => `<tr><td>${escapeHtml(row.document)}</td><td>${row.pages}</td><td>${row.chunks}</td><td>${row.text_chars}</td><td>${row.quality_score > 0 ? "通过" : "需检查"}</td></tr>`).join("") || '<tr><td colspan="5">暂无 PDF 文档。</td></tr>'; return; }
   if (method === "ragas") { const values = Object.entries(report).filter(([,v]) => typeof v === "number"); summary.innerHTML = values.map(([key,value]) => `<div class="metric"><span>${escapeHtml(key)}</span><strong>${Number(value).toFixed(3)}</strong></div>`).join("") || '<div class="metric"><span>RAGAS 报告</span><strong>已读取</strong></div>'; body.innerHTML = '<tr><td colspan="5">RAGAS 原始报告已读取；详细字段请查看 data/reports/ragas-latest.json。</td></tr>'; return; }
-  summary.innerHTML = `<div class="metric"><span>评测问题</span><strong>${report.question_count || 0}</strong></div><div class="metric"><span>Recall@${report.top_k}</span><strong>${report.recall_at_k ?? 0}</strong></div><div class="metric"><span>MRR@${report.top_k}</span><strong>${report.mrr_at_k ?? 0}</strong></div>`;
-  body.replaceChildren(); for (const row of report.details || []) { const tr=document.createElement("tr"); tr.innerHTML=`<td>${escapeHtml(row.question)}</td><td>${row.recall ?? "-"}</td><td>${row.reciprocal_rank ?? "-"}</td><td>${(row.found || []).join(", ") || "-"}</td><td>${row.evaluation === "refusal_only" ? "拒答题" : (row.recall > 0 ? "命中" : "未命中")}</td>`; body.append(tr); }
+  if (method === "route_compare") { const routes=report.routes || {}; summary.innerHTML=`<div class="metric"><span>数据集</span><strong>${escapeHtml(report.dataset || "all")}</strong></div><div class="metric"><span>抽样题数</span><strong>${report.sampled || 0}</strong></div><div class="metric"><span>比较路线</span><strong>${Object.keys(routes).length}</strong></div>`; body.innerHTML=Object.entries(routes).map(([name,row])=>`<tr><td>${escapeHtml(routeLabel(name))}</td><td>${row.recall_at_k ?? 0}</td><td>${row.ndcg_at_k ?? 0}</td><td>MRR ${row.mrr_at_k ?? 0}</td><td>${row.latency_ms?.p50 ?? 0} ms · P95 ${row.latency_ms?.p95 ?? 0}</td></tr>`).join(""); return; }
+  summary.innerHTML = `<div class="metric"><span>有效问题</span><strong>${report.question_count || 0}</strong></div><div class="metric"><span>Recall@${report.top_k}</span><strong>${report.recall_at_k ?? 0}</strong></div><div class="metric"><span>Hit Rate</span><strong>${report.hit_rate_at_k ?? 0}</strong></div><div class="metric"><span>MRR</span><strong>${report.mrr_at_k ?? 0}</strong></div><div class="metric"><span>nDCG</span><strong>${report.ndcg_at_k ?? 0}</strong></div><div class="metric"><span>P50 / P95</span><strong>${report.latency_ms?.p50 ?? 0} / ${report.latency_ms?.p95 ?? 0} ms</strong></div>`;
+  body.replaceChildren(); for (const row of report.details || []) { const tr=document.createElement("tr"); tr.innerHTML=`<td><strong>${escapeHtml(row.question)}</strong><small>${escapeHtml(row.dataset || "custom")}</small></td><td>${row.recall ?? "-"}</td><td>${row.ndcg ?? "-"}</td><td>${row.first_relevant_rank ?? "-"}</td><td>${row.evaluation === "refusal_only" ? "拒答样本" : (row.recall > 0 ? "命中" : "未命中")}</td>`; body.append(tr); }
 }
+
+function routeLabel(value) { return {hybrid_rerank:"混合 + BGE 重排",hybrid:"BM25 + Dense + RRF",bm25:"仅 BM25",dense:"仅 Dense"}[value] || value; }
+
+async function loadEvaluationDatasets() { try { const response=await fetch("/api/evaluations/datasets"); const data=await response.json(); const select=document.getElementById("evaluation-dataset"); select.innerHTML=(data.datasets || []).map((item)=>`<option value="${escapeHtml(item.id)}">${escapeHtml(item.id === "all" ? "全部数据集" : item.id)} · ${item.count} 题</option>`).join(""); } catch (_) {} }
+
+document.getElementById("evaluation-method").addEventListener("change", (event) => { document.getElementById("evaluation-route").disabled = event.target.value !== "retrieval"; });
 
 async function loadTraces() {
   const box = document.getElementById("trace-list"); box.textContent = "正在加载日志...";
@@ -464,6 +460,7 @@ async function loadTraces() {
 }
 
 document.getElementById("run-evaluation").addEventListener("click", runEvaluation);
+loadEvaluationDatasets();
 document.getElementById("refresh-traces").addEventListener("click", loadTraces);
 
 questionInput.addEventListener("keydown", (event) => {

@@ -12,7 +12,7 @@
 - **研究 Agent**：LangGraph 有界观察-行动循环，可调用本地 RAG 与 Web Search
 - **联网研究**：DeepSeek 原生 `web_search` 优先，本地 Search-Read-Rank 管线自动降级
 - **Web 工作台**：拖拽上传、后台进度、知识库管理、历史会话、逐轮引用、日志与评测页面
-- **评测闭环**：Recall/MRR、CMRC2018 测试集以及可选 RAGAS
+- **评测闭环**：可选数据集与题量，Recall/Precision/Hit Rate/MRR/nDCG/延迟，四路线消融以及可选 RAGAS
 
 ## 一分钟启动
 
@@ -105,6 +105,9 @@ docs/                  # 架构、部署、状态和深度技术说明
 
 # 重建演示知识库和黄金评测集
 .\.venv\Scripts\python.exe scripts\rebuild_demo_dataset.py
+
+# 指定数据集与路线进行轻量离线评测
+.\.venv\Scripts\rag-book.exe eval --dataset cmrc2018 --route hybrid_rerank --top-k 10
 ```
 
 ## 文档
