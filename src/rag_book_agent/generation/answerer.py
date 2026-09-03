@@ -10,6 +10,9 @@ from rag_book_agent.models import Answer, SearchResult
 class AnswerGenerator:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.last_native_web_results = []
+        self.last_native_web_trace = {}
+        self.last_api_error = ""
 
     def answer(
         self,
@@ -31,15 +34,22 @@ class AnswerGenerator:
         if self.settings.api_base and self.settings.api_model:
             if force_web and self.settings.deepseek_web_search and not self.settings.api_key:
                 fallback = self._extractive_answer(sources, web_results)
-                fallback += "\n\n> 已勾选 DeepSeek 联网搜索，但未配置 API Key。请在项目根目录 `.env` 设置 `RAG_BOOK_API_KEY` 后重试。"
+                fallback += (
+                    "\n\n> 已勾选 DeepSeek 联网搜索，但未配置 API Key。"
+                    "请在项目根目录 `.env` 设置 `RAG_BOOK_API_KEY` 后重试。"
+                )
                 return Answer(text=fallback, sources=sources, mode="extractive-fallback")
             try:
-                text = self._api_answer(question, sources, web_results or [], memory, force_web, agent_mode, agent_plan)
+                text = self._api_answer(
+                    question, sources, web_results or [], memory,
+                    force_web, agent_mode, agent_plan,
+                )
                 if agent_mode and self._looks_like_tool_narration(text):
                     fallback = self._extractive_answer(sources, web_results)
                     return Answer(text=fallback, sources=sources, mode="extractive-fallback")
                 return Answer(text=text, sources=sources, mode="api")
-            except (httpx.HTTPError, ValueError, KeyError):
+            except (httpx.HTTPError, ValueError, KeyError) as error:
+                self.last_api_error = str(error)[:500]
                 fallback = self._extractive_answer(sources, web_results)
                 return Answer(text=fallback, sources=sources, mode="extractive-fallback")
 
@@ -80,7 +90,8 @@ class AnswerGenerator:
         )
         if agent_mode:
             system_prompt += (
-                "当前是 Agent 研究综合模式。你已经拿到研究员返回的全部证据，禁止描述搜索、打开页面或工具调用过程。"
+                "当前是 Agent 研究综合模式。你已经拿到研究员返回的全部证据，"
+                "禁止描述搜索、打开页面或工具调用过程。"
                 "必须直接给出有结论的 Markdown 回答，先给结论，再给论据、限制和建议；"
                 "明确区分本地证据和网页证据，指出冲突与不确定性。若证据不足，说明缺口但仍总结已知事实。"
             )
@@ -106,10 +117,12 @@ class AnswerGenerator:
             "temperature": 0.1,
             "max_output_tokens": 900,
         }
-        if self.settings.deepseek_web_search:
+        has_native_web = any(
+            item.get("provider") == "deepseek-native" for item in web_results
+        )
+        if self.settings.deepseek_web_search and not has_native_web:
             payload["tools"] = [{"type": "web_search"}]
-            if force_web:
-                payload["tool_choice"] = {"type": "web_search"}
+            payload["max_tool_calls"] = self.settings.deepseek_web_max_tool_calls
         response = httpx.post(
             endpoint,
             headers=headers,
@@ -118,16 +131,92 @@ class AnswerGenerator:
         )
         response.raise_for_status()
         data = response.json()
-        text = data.get("output_text", "")
-        if not text:
-            for item in data.get("output", []):
-                for content in item.get("content", []):
-                    if content.get("type") in {"output_text", "text"}:
-                        text += content.get("text", "")
+        text, native_results, trace = self._parse_responses_data(data)
+        self.last_native_web_results = native_results
+        self.last_native_web_trace = trace
         text = text.strip()
         if not text:
             raise ValueError("API returned an empty answer")
         return text
+
+    def native_web_search(self, question: str) -> List[dict]:
+        """Run DeepSeek's server-side web_search and expose its cited research as evidence."""
+        if not (self.settings.api_base and self.settings.api_model and self.settings.api_key):
+            raise ValueError("DeepSeek Responses API is not configured")
+        endpoint = self.settings.api_base.rstrip("/") + "/responses"
+        payload = {
+            "model": self.settings.api_model,
+            "instructions": (
+                "你是网页研究工具。直接给出简洁、事实性的研究摘要，不要描述搜索过程。"
+                "必须列出来源链接；不确定的信息要明确标注。"
+            ),
+            "input": question,
+            "tools": [{"type": "web_search"}],
+            "max_tool_calls": self.settings.deepseek_web_max_tool_calls,
+            "max_output_tokens": self.settings.deepseek_web_max_output_tokens,
+            "temperature": 0.1,
+        }
+        response = httpx.post(
+            endpoint,
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + self.settings.api_key},
+            json=payload,
+            timeout=self.settings.request_timeout,
+        )
+        response.raise_for_status()
+        text, results, trace = self._parse_responses_data(response.json())
+        if not text:
+            raise ValueError("DeepSeek native web search returned no final message")
+        if not results:
+            results = [{"title": "DeepSeek 原生网页研究", "url": "", "text": text,
+                        "provider": "deepseek-native", "fetch_status": "server-search"}]
+        else:
+            results[0]["text"] = text
+        self.last_native_web_results = results
+        self.last_native_web_trace = trace
+        return results
+
+    @staticmethod
+    def _parse_responses_data(data: dict):
+        text_parts = []
+        citations = []
+        calls = []
+        for item in data.get("output", []):
+            if item.get("type") == "web_search_call":
+                action = item.get("action") or {}
+                calls.append({"status": item.get("status", ""),
+                              "action": action.get("type", "")})
+            if item.get("type") != "message":
+                continue
+            for content in item.get("content", []):
+                if content.get("type") not in {"output_text", "text"}:
+                    continue
+                value = content.get("text", "")
+                text_parts.append(value)
+                for annotation in content.get("annotations", []):
+                    citation = annotation.get("url_citation", annotation)
+                    url = citation.get("url", "")
+                    if url:
+                        citations.append({"title": citation.get("title", url), "url": url})
+        text = (data.get("output_text") or "".join(text_parts)).strip()
+        for title, url in re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", text):
+            citations.append({"title": title, "url": url})
+        results = []
+        seen = set()
+        for citation in citations:
+            url = citation["url"].split("#ws_call_id=", 1)[0]
+            if url in seen:
+                continue
+            seen.add(url)
+            results.append({"title": citation["title"], "url": url, "text": "",
+                            "provider": "deepseek-native", "fetch_status": "server-search"})
+        trace = {
+            "status": data.get("status", ""), "tool_calls": len(calls),
+            "completed_calls": sum(call["status"] == "completed" for call in calls),
+            "actions": calls, "citations": len(results),
+            "incomplete_reason": (data.get("incomplete_details") or {}).get("reason", ""),
+        }
+        return text, results, trace
 
     def _extractive_answer(self, sources: List[SearchResult], web_results=None) -> str:
         lines = ["基于检索证据的回答：", ""]
@@ -145,7 +234,12 @@ class AnswerGenerator:
         hits = sum(text.count(marker) for marker in markers)
         sentences = [item for item in re.split(r"[。！？!?]", text) if item.strip()]
         has_evidence = bool(re.search(r"\[(?:S|W)\d+\]", text))
-        return (hits >= 3 and not has_evidence) or (len(sentences) >= 4 and all(marker in text for marker in ("让我", "搜索")) and not has_evidence)
+        repeated_narration = (
+            len(sentences) >= 4
+            and all(marker in text for marker in ("让我", "搜索"))
+            and not has_evidence
+        )
+        return (hits >= 3 and not has_evidence) or repeated_narration
 
     @staticmethod
     def _excerpt(text: str, limit: int) -> str:

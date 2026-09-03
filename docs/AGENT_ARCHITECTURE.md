@@ -28,7 +28,7 @@ Web API / 前端 Agent 开关
              |       child 命中后展开 parent，上层按 parent_id 去重
              |
              +--> Web Researcher：并行调用 web_search
-             |       fetch -> Playwright 兜底，按 URL 去重
+             |       DeepSeek 原生搜索 -> 本地 Search-Read-Rank 兜底
              |
              +--> Synthesizer：把本地证据、网页证据、记忆和计划
                      交给 DeepSeek Responses API
@@ -74,7 +74,7 @@ SQLite 检索保持单线程，避免连接跨线程；网页任务可以并行�
 
 ### 3.4 Web Researcher
 
-Agent 工具会强制调用本地 WebSearch 适配器。当前适配器不是 DeepSeek 服务端原生搜索，而是本地：
+Agent 的 `web_search` 工具优先调用 DeepSeek Responses API 原生 `web_search`。服务端负责 search/open_page 的自动续推，应用限制 `max_tool_calls`，并解析最终 message、`url_citation` 和 Markdown 来源链接，将它们转成右侧网页证据。原生调用失败时，自动降级到本地 Search-Read-Rank 管线：`ddgs` 发现候选，`httpx + trafilatura` 读取正文，静态抓取失败时由 Playwright 兜底，最后复用 BGE reranker 排序。
 
 ```text
 DuckDuckGo HTML fetch

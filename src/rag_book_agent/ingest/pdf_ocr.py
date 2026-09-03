@@ -3,7 +3,7 @@
 from typing import Any
 
 
-class PaddlePdfReader:
+class RapidPdfReader:
     _pipeline = None
     _formula_enabled = False
     _table_enabled = False
@@ -40,7 +40,7 @@ class PaddlePdfReader:
         texts = []
         scores = []
         tables = 0
-        # PaddleOCR 2.x returns one list per image: [[[[box], (text, score)], ...]].
+        # RapidOCR returns a list of [box, text, confidence] records.
         for page in result or []:
             if isinstance(page, list):
                 for line in page:
@@ -82,3 +82,7 @@ class PaddlePdfReader:
         elif isinstance(value, list):
             for item in value:
                 self._walk(item, texts, scores)
+
+
+# Compatibility alias for integrations written before the OCR engine migration.
+PaddlePdfReader = RapidPdfReader

@@ -72,9 +72,9 @@ class DocumentLoader:
         return sorted(documents)
 
     def _load_pdf(self, path: Path) -> List[Page]:
-        # Keep page boundaries and coordinates through PyMuPDF first.
+        # pymupdf4llm preserves reading order and converts native tables to Markdown.
         try:
-            pages = self._load_pdf_pymupdf(path)
+            pages = self._load_pdf_pymupdf4llm(path)
             if all(len(page.text) >= self._min_text_chars() for page in pages):
                 return pages
         except Exception:
@@ -88,9 +88,9 @@ class DocumentLoader:
             except Exception as exc:
                 # Keep a diagnostic page so callers can report the real failure.
                 return [Page(number=1, text="", parser="ocr_error", ocr_error=str(exc))]
-        # MarkItDown and pypdf remain compatibility fallbacks.
+        # Keep the low-level extractor as a dependency-light compatibility fallback.
         try:
-            pages = self._load_pdf_markitdown(path)
+            pages = self._load_pdf_pymupdf(path)
             if any(page.text for page in pages):
                 return pages
         except Exception:
@@ -99,10 +99,10 @@ class DocumentLoader:
 
     def _load_pdf_pymupdf_with_ocr(self, path: Path) -> List[Page]:
         import fitz
-        from rag_book_agent.ingest.pdf_ocr import PaddlePdfReader
+        from rag_book_agent.ingest.pdf_ocr import RapidPdfReader
 
         document = fitz.open(str(path))
-        reader = PaddlePdfReader(
+        reader = RapidPdfReader(
             dpi=self._setting("pdf_render_dpi", 220),
             formula=self._setting("pdf_formula_enabled", True),
             tables=self._setting("pdf_table_enabled", True),
@@ -115,7 +115,7 @@ class DocumentLoader:
                     pages.append(Page(number=number, text=native, parser="pymupdf", image_count=len(pdf_page.get_images())))
                     continue
                 text, confidence, table_count = reader.read_page(pdf_page)
-                pages.append(Page(number=number, text=self._normalize(text), parser="paddleocr", ocr_used=True, ocr_confidence=confidence, image_count=len(pdf_page.get_images()), table_count=table_count))
+                pages.append(Page(number=number, text=self._normalize(text), parser="rapidocr", ocr_used=True, ocr_confidence=confidence, image_count=len(pdf_page.get_images()), table_count=table_count))
         finally:
             document.close()
         return pages
@@ -127,17 +127,25 @@ class DocumentLoader:
         return int(self._setting("pdf_min_text_chars", 20))
 
     def _ocr_enabled(self) -> bool:
-        return bool(self._setting("pdf_ocr_enabled", False))
+        # OCR is the required fallback for scanned PDFs; callers may explicitly disable it.
+        return bool(self._setting("pdf_ocr_enabled", True))
 
-    def _load_pdf_markitdown(self, path: Path) -> List[Page]:
-        from markitdown import MarkItDown
+    def _load_pdf_pymupdf4llm(self, path: Path) -> List[Page]:
+        """Convert a text PDF page-by-page, retaining Markdown tables and headings."""
+        import pymupdf4llm
 
-        result = MarkItDown().convert(str(path))
-        text = self._normalize(getattr(result, "text_content", "") or "")
-        raw_pages = [part for part in text.split("\f") if part.strip()]
-        if not raw_pages:
-            raw_pages = [text]
-        return [Page(number=index, text=part) for index, part in enumerate(raw_pages, start=1)]
+        pages = pymupdf4llm.to_markdown(str(path), page_chunks=True, show_progress=False)
+        if isinstance(pages, str):
+            pages = [{"text": pages}]
+        result = []
+        for number, item in enumerate(pages, start=1):
+            if isinstance(item, dict):
+                text = item.get("text", "") or item.get("markdown", "")
+                page_number = int(item.get("metadata", {}).get("page", number))
+            else:
+                text, page_number = str(item), number
+            result.append(Page(number=page_number, text=self._normalize(text), parser="pymupdf4llm"))
+        return result or [Page(number=1, text="", parser="pymupdf4llm")]
 
     def _load_pdf_pymupdf(self, path: Path) -> List[Page]:
         import fitz

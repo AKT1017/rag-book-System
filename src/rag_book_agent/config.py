@@ -25,11 +25,20 @@ class Settings:
     web_search_enabled: bool = False
     web_search_provider: str = "duckduckgo"
     deepseek_web_search: bool = True
+    deepseek_web_max_tool_calls: int = 6
+    deepseek_web_max_output_tokens: int = 1400
+    web_search_candidate_multiplier: int = 3
+    web_search_per_domain_limit: int = 2
+    web_search_max_workers: int = 4
+    web_search_discovery_timeout_seconds: int = 8
+    web_search_page_timeout_seconds: int = 8
+    web_search_max_page_chars: int = 8000
+    web_search_user_agent: str = "Mozilla/5.0 (compatible; RagBookResearch/1.0)"
     api_base: str = ""
     api_model: str = ""
     api_key_env: str = "RAG_BOOK_API_KEY"
     request_timeout: int = 90
-    pdf_backend: str = "pymupdf"
+    pdf_backend: str = "pymupdf4llm"
     pdf_min_text_chars: int = 20
     pdf_ocr_enabled: bool = True
     pdf_ocr_engine: str = "rapidocr"
@@ -41,6 +50,13 @@ class Settings:
     child_chunk_size: int = 900
     agent_timeout_seconds: int = 45
     agent_max_react_steps: int = 3
+    agent_local_confidence_threshold: float = 0.8
+    agent_local_context_chars: int = 6000
+    agent_web_context_chars: int = 4000
+    agent_web_timeout_seconds: int = 30
+    agent_planner_timeout_seconds: float = 1.5
+    agent_fast_question_max_chars: int = 32
+    agent_two_stage_full_sources: int = 3
 
     @property
     def database_path(self) -> Path:

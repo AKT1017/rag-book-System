@@ -9,7 +9,7 @@
 - 约 2 GB 磁盘空间：虚拟环境、ChromaDB 和两个模型
 - DeepSeek API Key（仅在需要生成式答案或联网搜索时需要）
 
-PDF 解析使用 PyMuPDF（成熟的 MuPDF Python 绑定）；如果安装失败或单个 PDF 不兼容，会自动回退到 pypdf。项目同时声明 `cryptography`，用于 pypdf 读取 AES 加密 PDF。扫描版 PDF 若没有文本层仍需要额外 OCR，当前不会把 OCR 运行时强制安装进主环境。
+PDF 首选 pymupdf4llm 生成结构化 Markdown；低文本或扫描页使用 RapidOCR ONNX。解析异常时依次回退 PyMuPDF 和 pypdf。项目声明 `cryptography` 以支持 pypdf 读取 AES 加密 PDF。
 
 ## 2. 安装项目
 
@@ -20,7 +20,11 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-升级已有环境时执行同一条安装命令，以安装新增的 `PyMuPDF` 依赖。
+升级已有环境时执行同一条安装命令，以同步 PDF、Web Search 和 Agent 依赖。Playwright 仅是动态网页兜底；首次需要该能力时安装 Chromium：
+
+```powershell
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
 
 检查安装：
 
@@ -70,7 +74,7 @@ RAG_BOOK_API_KEY=sk-你的密钥
 }
 ```
 
-`deepseek_web_search=true` 表示允许请求中携带 DeepSeek `web_search` 工具；`web_search_enabled=true` 才会启用本地 DuckDuckGo fetch/Playwright 适配器。不要把 Key 写入 `config.json`。
+`deepseek_web_search=true` 表示 Agent 优先调用 DeepSeek Responses API 的原生 `web_search` 工具，并解析服务端搜索调用和网页引用；`web_search_enabled=true` 控制普通问答是否主动启用本地网页适配器。Agent 在 DeepSeek 原生搜索失败时仍会自动使用本地 `ddgs -> httpx/trafilatura -> Playwright` 降级链路。不要把 Key 写入 `config.json`。
 
 ## 5. 初始化和导入资料
 
@@ -82,9 +86,9 @@ RAG_BOOK_API_KEY=sk-你的密钥
 
 Web 页面也支持拖拽上传。支持扩展名：`.pdf`、`.md`、`.markdown`、`.txt`、`.docx`、`.xlsx`、`.xls`、`.pptx`、`.csv`。PDF、Word、Excel 和 PPT 会进入后台异步任务，页面可查看处理进度；导入后可在页面中启用/禁用文档，以及选择是否纳入知识库。
 
-PDF 导入会逐页保留页码，并按页面文本块的阅读顺序抽取内容；多栏文档通常比基础文本抽取更稳定。导入结果仍进入原有切分、ChromaDB、BM25、RRF 和重排管线，不需要额外迁移。
+PDF 导入会保留软页码标记，先连续处理全文，再进入章节感知父子分块；多栏文档由 pymupdf4llm 负责结构化 Markdown。扫描页使用 RapidOCR。导入结果仍进入 ChromaDB、BM25、RRF 和重排管线，不需要额外迁移。
 
-MarkItDown 作为首选转换层处理 PDF；不兼容时自动回退到 PyMuPDF，再回退到 pypdf。转换后的 Markdown 不会绕过现有索引流程。
+pymupdf4llm 作为首选转换层处理电子 PDF，并输出适合 RAG 的 Markdown；扫描页自动使用 RapidOCR。解析异常时回退到 PyMuPDF，再回退到 pypdf。转换后的 Markdown 不会绕过现有索引流程。
 
 ## 6. 启动 Web 前端
 
@@ -98,7 +102,7 @@ MarkItDown 作为首选转换层处理 PDF；不兼容时自动回退到 PyMuPDF
 .\.venv\Scripts\python.exe -m uvicorn rag_book_agent.web.app:app --host 127.0.0.1 --port 8009
 ```
 
-页面顶部会显示 AI 连接状态。提问时勾选“强制联网搜索”会把 `tool_choice` 发送给 DeepSeek；不勾选时由模型自行决定是否使用工具。
+页面顶部会显示 AI 连接状态。普通知识问答以本地资料为主；研究 Agent 会按复杂度和证据充分度决定是否调用原生 Web Search。应用不会强制发送 `tool_choice`，而是在显式网页研究节点中允许 DeepSeek 服务端自主完成搜索和打开页面，避免连续工具调用耗尽输出预算。
 
 ## 7. 常用 API
 
@@ -154,7 +158,7 @@ python -m venv .venv-ragas
 
 上传后搜不到：检查文档是否“启用”且“纳入知识库”，然后重新导入或重启服务。
 
-DeepSeek 搜索参数报错：不同 API 版本的工具字段可能变化，先关闭 `deepseek_web_search` 使用本地证据模式，再依据服务端错误调整 `answerer.py` 的 Responses 请求格式。
+DeepSeek 原生搜索失败：先查看日志中的 `agent_web_pipeline`。系统会自动降级到本地 Search-Read-Rank；若本地动态页面也需要兜底，确认已执行 `python -m playwright install chromium`。Responses 端点必须支持 `tools=[{"type":"web_search"}]`。
 
 ## 10. 备份与升级
 

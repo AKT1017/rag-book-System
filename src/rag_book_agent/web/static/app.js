@@ -19,7 +19,6 @@ const langGraphSubmit = document.getElementById("langgraph-submit");
 const langGraphResult = document.getElementById("langgraph-result");
 const langGraphTrace = document.getElementById("langgraph-trace");
 const langGraphAnswer = document.getElementById("langgraph-answer");
-const langGraphDiagram = document.getElementById("langgraph-diagram");
 const memoryKey = "rag-book-session-id";
 const sessionId = localStorage.getItem(memoryKey) || crypto.randomUUID();
 localStorage.setItem(memoryKey, sessionId);
@@ -62,7 +61,6 @@ function switchPage(page) {
     button.classList.toggle("active", button.dataset.page === page);
   });
   document.querySelector(".workspace").classList.toggle("show-evidence", page === "rag" || page === "langgraph");
-  if (page === "langgraph") langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`;
   if (page === "logs") loadTraces();
 }
 
@@ -71,11 +69,12 @@ function renderLangGraphTrace(trace) {
     langGraphTrace.textContent = "本次没有可展示的节点轨迹。";
     return;
   }
-  langGraphTrace.textContent = trace.map((item, index) => {
-    const name = item.node || "unknown";
-    const details = Object.entries(item).filter(([key]) => key !== "node").map(([key, value]) => `${key}=${value}`).join(" · ");
-    return `${index + 1}. ${name}${details ? `  ${details}` : ""}`;
-  }).join("\n");
+  const names = {understand:"理解任务", plan:"制定研究计划", decide_action:"选择下一行动", local_search:"检索本地知识库", web_search:"搜索网页资料", observe:"观察工具结果", evidence_review:"整理证据", synthesize:"生成最终结论"};
+  langGraphTrace.innerHTML = trace.map((item, index) => {
+    const name = names[item.node] || item.node || "未知步骤";
+    const details = Object.entries(item).filter(([key]) => key !== "node").map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`).join(" · ");
+    return `<div class="timeline-item"><span class="timeline-index">${String(index + 1).padStart(2,"0")}</span><div><strong>${escapeHtml(name)}</strong><p>${escapeHtml(details || "已完成")}</p></div></div>`;
+  }).join("");
 }
 
 async function loadStatus() {
@@ -316,7 +315,6 @@ document.getElementById("export-logs").addEventListener("click", () => {
 });
 document.getElementById("new-session").addEventListener("click", newSession);
 document.querySelectorAll(".app-nav-item").forEach((button) => button.addEventListener("click", () => switchPage(button.dataset.page)));
-document.getElementById("refresh-langgraph").addEventListener("click", () => { langGraphDiagram.src = `/api/langgraph/diagram?ts=${Date.now()}`; });
 fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
 ["dragenter", "dragover"].forEach((eventName) => {
   dropZone.addEventListener(eventName, (event) => {
@@ -393,8 +391,8 @@ langGraphForm.addEventListener("submit", async (event) => {
   langGraphSubmit.textContent = "运行中";
   langGraphResult.textContent = "LangGraph 正在运行...";
   langGraphTrace.textContent = "图正在运行，等待节点结果...";
-  const nodes = [...document.querySelectorAll(".live-node")];
-  nodes.forEach((node) => node.className = "live-node");
+  const nodes = [...document.querySelectorAll(".agent-map-node")];
+  nodes.forEach((node) => node.classList.remove("active", "done", "skipped", "failed"));
   document.getElementById("langgraph-live-status").textContent = "运行中";
   try {
     const response = await fetch("/api/langgraph/run/stream", {
@@ -408,8 +406,8 @@ langGraphForm.addEventListener("submit", async (event) => {
       const {value, done} = await reader.read(); if (done) break;
       buffer += decoder.decode(value, {stream:true}); const lines = buffer.split("\n"); buffer = lines.pop();
       for (const line of lines) { if (!line) continue; const item = JSON.parse(line);
-        if (item.type === "node") { const active = document.querySelector(`.live-node[data-node="${item.node}"]`); if (active) { active.classList.add("done"); active.querySelector("small").textContent = Object.entries(item.update || {}).map(([k,v]) => `${k}: ${v}`).join(" · ") || "完成"; } traces.push({node:item.node, ...(item.update || {})}); renderLangGraphTrace(traces); }
-        if (item.type === "done") { langGraphResult.innerHTML = renderMarkdown(item.answer || ""); langGraphAnswer._sources = item.sources || []; renderRetrieval(item.retrieval || {}); setText("answer-mode", item.mode || "LangGraph"); renderSources(item.sources || []); document.getElementById("langgraph-live-status").textContent = "已完成"; }
+        if (item.type === "node") { document.querySelectorAll(".agent-map-node.active").forEach((node) => { node.classList.remove("active"); node.classList.add("done"); }); const active = document.querySelector(`.agent-map-node[data-node="${item.node}"]`); if (active) { active.classList.remove("skipped"); active.classList.add("active"); active.querySelector("small").textContent = Object.entries(item.update || {}).map(([k,v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ") || "执行中"; } if (item.node === "evidence_review" && item.update && item.update.sources) { const preview = document.getElementById("langgraph-evidence-preview"); preview.textContent = "即将引用\n" + item.update.sources.map((s) => `${s.kind === "web" ? "网页" : "本地"}: ${s.title || "资料"}${s.page ? " · 第 " + s.page + " 页" : ""}`).join("\n"); } traces.push({node:item.node, ...(item.update || {})}); renderLangGraphTrace(traces); }
+        if (item.type === "done") { document.querySelectorAll(".agent-map-node.active").forEach((node) => { node.classList.remove("active"); node.classList.add("done"); }); langGraphResult.innerHTML = renderMarkdown(item.answer || ""); langGraphAnswer._sources = item.sources || []; renderRetrieval(item.retrieval || {}); setText("answer-mode", item.mode || "LangGraph"); renderSources(item.sources || []); document.getElementById("langgraph-live-status").textContent = "已完成"; }
         if (item.type === "error") throw new Error(item.message || "LangGraph 失败");
       }
     }

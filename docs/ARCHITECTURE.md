@@ -1,58 +1,108 @@
-# RAG Book Agent 架构说明
+# RAG Book Agent 架构
 
-## 1. 当前定位
+## 1. 系统定位
 
-这是一个本机优先的中文书籍 RAG Web 应用。它使用 Python 编写，支持 PDF、Markdown、TXT 导入，使用 ChromaDB 保存向量，使用 SQLite 保存文档元数据和全文索引，浏览器前端负责上传、资料管理和问答。
+这是一个单机部署、Web 操作的中文文档 RAG 与研究 Agent。系统不要求 Docker 或外部数据库服务，业务数据保存在 SQLite 和 ChromaDB，本地模型保存在 `models/`，DeepSeek 仅承担可选的远程生成与原生网页研究。
 
-项目不依赖 Docker 或独立数据库服务；模型文件和运行数据放在本机 `models/`、`data/` 中，均不提交到 Git。
+## 2. 模块边界
 
-## 2. 目录职责
+| 模块 | 路径 | 职责 |
+|---|---|---|
+| 文档加载 | `ingest/` | PDF/OCR、Markdown、TXT、Word、Excel、PPT、CSV 转换 |
+| 分块 | `chunking.py` | 标题识别、跨页连续文本、父子分块、页码映射 |
+| 元数据 | `storage.py` | SQLite 文档、块、FTS5、评测题、查询轨迹 |
+| 向量库 | `vector_store.py` | ChromaDB 写入、删除和相似度查询 |
+| 检索 | `retrieval/` | Query 处理、BM25、BGE embedding、RRF 和 reranker |
+| 生成 | `generation/` | DeepSeek Responses 请求、原生搜索响应和引用解析 |
+| Agent | `agent/` | LangGraph 状态图、决策循环和白名单工具 |
+| Web Search | `web_search.py` | 原生搜索失败后的本地 Search-Read-Rank |
+| 会话 | `memory.py` | JSONL 近期对话与 Markdown 滚动摘要 |
+| Web | `web/` | FastAPI、异步导入任务和原生 HTML/CSS/JS 前端 |
+| 编排 | `service.py` | 导入、问答、状态、日志与反馈的统一业务入口 |
+
+## 3. 文档导入链路
 
 ```text
-rag-book-agent/
-├─ src/rag_book_agent/       # 应用源码
-│  ├─ ingest/                # PDF/MD/TXT 加载与文本抽取
-│  ├─ retrieval/             # BM25、BGE 向量、RRF、重排
-│  ├─ generation/            # DeepSeek Responses API 与本地证据回退
-│  ├─ web/                   # FastAPI 路由和静态前端
-│  ├─ chunking.py            # 文本清洗、章节感知切片
-│  ├─ storage.py             # SQLite 文档、chunk、评测数据
-│  ├─ vector_store.py        # ChromaDB 封装
-│  ├─ service.py             # 导入、检索、问答的业务门面
-│  ├─ memory.py              # JSONL 近期记忆和 Markdown 压缩摘要
-│  ├─ web_search.py          # fetch 搜索，Playwright 兜底
-│  ├─ audit_log.py           # HTTP 操作审计日志
-│  ├─ config.py              # config.json 与 .env 配置
-│  └─ cli.py                 # 命令行入口
-├─ src/rag_book_agent/web/static/ # HTML、CSS、JavaScript 前端
-├─ scripts/                  # CMRC/RAGAS/路线评测和范本导入脚本
-├─ samples/                  # 可导入的示例资料和问题集
-├─ tests/                    # 单元、工作流、Web 接口测试
-├─ docs/                     # 设计、状态、部署和评测文档
-├─ config.json               # 本机默认配置（不含密钥）
-└─ pyproject.toml            # 安装、依赖和命令入口
+上传文件
+  -> 后台导入任务
+  -> 格式加载器
+     PDF: pymupdf4llm -> RapidOCR -> PyMuPDF -> pypdf
+     Office/CSV: 对应轻量 Python 库
+  -> 标准化 Page 列表
+  -> 带软页码标记的连续文档
+  -> 章节父块（约 3600 字符）
+  -> 重叠子块（约 900 字符，重叠 220）
+  -> SQLite 文档/块/FTS5
+  -> ChromaDB 子块向量
 ```
 
-## 3. 一次问答的处理链
+父块保存完整上下文，子块参与索引。旧数据不会自动获得新分块策略，需要重新导入。
 
-1. 前端向 `/api/ask/stream` 发送问题、会话 ID 和 `force_web`。
-2. `QuestionProcessor` 做轻量问题清洗和术语扩展。
-3. SQLite FTS5/BM25 与 ChromaDB 稠密向量分别召回。
-4. 两路结果用 RRF 合并，再使用 `BAAI/bge-reranker-base` 对候选重排。
-5. 根据配置调用 DeepSeek Responses API；未配置 API 时返回本地证据摘要。
-6. 答案以 Markdown 形式返回，并通过 `[S1]` 引用对应本地证据。
-7. `MemoryStore` 保存近期问答，并定期生成压缩摘要。
+## 4. 本地检索链路
 
-联网搜索有两种开关：`deepseek_web_search` 控制是否向 DeepSeek 发送内置工具，`web_search_enabled` 控制本地 DuckDuckGo 适配器。前端“强制联网搜索”只会强制 DeepSeek 工具调用，不代表服务端一定成功调用，真实调用结果应以 API 返回为准。
+```text
+问题
+ -> 规则与缓存
+ -> Query 规范化、术语扩展与轻量路由
+ -> FTS5/BM25 稀疏召回 ┐
+ -> BGE-small 稠密召回 ├-> RRF -> 子块 BGE reranker
+                       ┘          -> Top-K 子块
+                                  -> parent_id 去重和父块扩展
+                                  -> 上下文预算
+                                  -> DeepSeek / 本地证据摘要
+```
 
-## 4. 数据与安全边界
+子块先重排再扩展父块，避免长父块被 Cross-Encoder 截断。多个子块指向同一父块时只保留一次。
 
-- `data/rag_book.db`：SQLite 元数据、chunk、FTS5、评测题。
-- `data/chroma/`：ChromaDB 持久化向量。
+## 5. LangGraph Agent
+
+Agent 是有界的观察-行动循环，而不是固定线性流水线：
+
+```text
+START -> understand -> plan -> decide_action
+                               | local_search
+                               | web_search
+                               | finalize
+          tool -> observe -----|
+          finalize -> evidence_review -> synthesize -> END
+```
+
+- 首次行动优先建立本地事实基础。
+- 深度问题或本地证据不足时调用网页研究。
+- `agent_max_react_steps` 限制工具行动次数。
+- `evidence_review` 按父块/URL 去重并执行本地、网页字符预算。
+- 外部搜索失败不会终止图，仍可依据本地证据回答。
+
+## 6. Web Search 双通道
+
+首选通道：
+
+```text
+DeepSeek Responses API
+-> tools=[{"type":"web_search"}]
+-> 服务端 search/open_page 自动续推
+-> 解析 message、url_citation 和 Markdown 来源链接
+-> 转成网页证据
+```
+
+本地降级通道：
+
+```text
+DDGS -> URL 规范化/域名多样性 -> httpx 并发读取
+-> trafilatura 正文抽取 -> Playwright 动态页兜底
+-> 正文去重和质量过滤 -> 复用 BGE reranker
+```
+
+`deepseek_web_search` 控制原生工具；`web_search_enabled` 控制普通问答是否主动运行本地搜索。Agent 即使本地开关关闭，也可在原生工具失败后调用本地降级通道。
+
+## 7. 数据、安全与运行边界
+
+- `data/rag_book.db`：SQLite、FTS5、评测和轨迹。
+- `data/chroma/`：向量索引。
 - `data/uploads/`：上传原文件。
-- `data/memory/`：会话 JSONL 和压缩 Markdown。
-- `data/logs/operations.log`：操作审计日志，可从前端导出 TXT。
-- `models/`：本地 BGE 模型。
-- `.env`：DeepSeek 密钥，仅本机保存。
+- `data/memory/`：会话 JSONL 和摘要 Markdown。
+- `data/logs/`：可导出的操作日志。
+- `.env`：API Key，不提交 Git。
+- `models/`：本地 BGE 模型，不提交 Git。
 
-这些路径已在 `.gitignore` 中排除。生产部署前还应增加登录、反向代理和上传鉴权。
+网页抓取拒绝非公网地址；Agent 工具是固定白名单，不具备 Shell、任意文件读写或任意代码执行能力。当前没有登录、多租户、权限隔离和生产级高可用，部署到公网前必须增加鉴权、反向代理、限流和审计保护。

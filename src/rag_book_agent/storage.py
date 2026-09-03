@@ -192,7 +192,7 @@ class Storage:
                 parent_ids[chunk.position] = chunk_id
             else:
                 parent_id = parent_ids.get(chunk.parent_id)
-                if parent_id:
+                if parent_id is not None:
                     cursor.execute("UPDATE chunks SET parent_id = ? WHERE id = ?", (parent_id, chunk_id))
                 cursor.execute("INSERT INTO chunks_fts(rowid, text, heading) VALUES (?, ?, ?)", (chunk_id, chunk.text, chunk.heading))
 

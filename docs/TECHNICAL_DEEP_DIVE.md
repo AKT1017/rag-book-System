@@ -28,7 +28,7 @@
                         │           │           │           │
      ┌──────────────────▼──┐  ┌─────▼─────┐  ┌─▼────────┐  ┌▼──────────────┐
      │  DocumentLoader      │  │ Chapter   │  │ Hybrid   │  │ AnswerGenerator│
-     │  MarkItDown→PyMuPDF  │  │ Chunker   │  │ Retriever│  │ DeepSeek API / │
+     │ pymupdf4llm→RapidOCR │  │ Chunker   │  │ Retriever│  │ DeepSeek API / │
      │  →pypdf 三级回退      │  │ 父子分块   │  │ 混合检索  │  │ 本地摘要降级    │
      └──────────────────────┘  └─────┬─────┘  └────┬─────┘  └───────┬────────┘
                                      │             │                │
@@ -100,7 +100,7 @@ Agent 模式（独立显式开启）：AgentOrchestrator
 
 ```text
 PDF 解析回退链（loaders.py:57-70）：
-  第 1 级 MarkItDown   —— 通用文档转换，能保留标题结构（_load_pdf_markitdown）
+  第 1 级 pymupdf4llm —— 电子 PDF 结构化 Markdown、阅读顺序和表格保留（_load_pdf_pymupdf4llm）
   第 2 级 PyMuPDF      —— 逐页 get_text("blocks", sort=True)，按块排序保阅读顺序，
                            对多栏排版的书籍更稳（_load_pdf_pymupdf）
   第 3 级 pypdf        —— strict=False，逐页 extract_text，最保守（_load_pdf_pypdf）
@@ -215,8 +215,8 @@ def _looks_like_heading(line, buffer):
      ├─ 稀疏路：FTS5 BM25 取 30 → token 交集 fallback 补足到 30
      ├─ 稠密路：ChromaDB 向量取 30（不可用 → HashEmbedding 全库暴力）
      ├─ RRF 融合：score = Σ 1/(k + rank)，k=60，截断 Top-12
-     ├─ 父块展开：每个候选把 text 替换为父块全文（同一父块只展开一次）
-     ├─ 重排：BGE 交叉编码器对 (问题, heading+父块文本) 打分
+     ├─ 重排：BGE 交叉编码器先对精简 Child 文本打分
+     ├─ 父块展开：只对最终 Top-K 子块回溯父块全文，并按父块去重
      │        （模型缺失/加载失败 → LightweightReranker 词覆盖兜底）
      └─ 排序：(rerank_score, fusion_score) 双键降序 → 取前 limit=6
 ```
@@ -248,11 +248,11 @@ fusion_score(chunk) = Σ_retriever  1 / (k + rank_of_chunk)    k = 60
 #### ④ 父块展开（`engine.py:135-138`）——本项目最值得讲的设计
 
 ```text
-关键顺序：RRF 融合 → Top-12 截断 → 父块展开 → 重排打分 → 排序取 6
+关键顺序：RRF 融合 → Top-12 截断 → Child 重排 → 排序取 6 → 父块回溯
 ```
 
 - 候选集合用 `chunk_id` 作字典 key（`engine.py:116, 122`），天然去重；展开父块时每个父块**只被取一次**（按 chunk_id 查 `get_chunk`）；
-- **展开发生在重排之前**：交叉编码器打分的对象就是最终要送给 LLM 的父块文本——**打分对象与生成对象完全一致**，这是"检索和生成口径统一"的关键工程细节；
+- **回溯发生在重排之后**：交叉编码器只处理 Child 文本，避免 3600 字符父块触发 512 Token 截断；最终入选后再恢复 Parent 上下文。
 - 重排分是后续所有排序（含 Agent 阶段跨子问题的择优）的统一货币（`orchestrator.py:80` 比较 `rerank_score`）。
 
 #### ⑤ 重排（`engine.py:41-72`）
@@ -312,7 +312,7 @@ payload:
   input            = 问题 + 记忆 + 本地证据(<source id="S1">) + 网页补充(<web>)
   temperature      = 0.1
   max_output_tokens = 900
-  tools（可选）    = [{"type": "web_search"}]，force_web 时 tool_choice 强制
+  tools（可选）    = [{"type": "web_search"}]，并使用 max_tool_calls 限制原生搜索次数
 ```
 
 关键设计：
@@ -374,6 +374,18 @@ Synthesizer 不新开模型：复用同一个 AnswerGenerator 的 agent_mode 分
 
 ### 2.9 联网搜索（WebSearch）
 
+Agent 联网的首选通道是 DeepSeek Responses API 原生 `web_search`。请求使用 `tools=[{"type":"web_search"}]` 和有界的 `max_tool_calls`，允许服务端自主执行 search/open_page 并形成最终 message。应用解析 `web_search_call`、`message.content[].annotations.url_citation`，并兼容正文中的 Markdown 链接。原生工具失败或没有最终正文时，才进入下述本地 Search-Read-Rank 管线。
+
+当前实现采用有界的 **Search -> Read -> Rank** 管线，而不是把搜索结果标题直接交给模型：
+
+1. `ddgs` 获取最多 `limit * 3` 个候选结果；失败时回退 DuckDuckGo HTML；
+2. 规范化跳转 URL、移除跟踪参数和重复链接，并限制每个域名最多 2 条；
+3. `httpx` 并发读取候选网页，`trafilatura` 提取正文和表格；静态请求失败时才启用 Playwright；
+4. 对重复正文做指纹去重，并复用本地 `BAAI/bge-reranker-base` 对标题、摘要和正文重排；
+5. 只把排序后的 Top-K 正文交给证据预算与生成节点。任一网页失败只影响该候选，不中断整轮 Agent。
+
+这一结构借鉴成熟 Research Agent 的共同做法，但保留本项目的轻量边界：不增加生成模型、不允许任意 URL 工具调用，且抓取前拒绝本机、内网和保留地址，降低 SSRF 风险。
+
 **代码**：`web_search.py`
 
 ```text
@@ -393,7 +405,7 @@ search(question, limit=5, force=False)
 
 1. **联网不是回答成立的前提**：无论 fetch 还是 Playwright 失败，管线都继续走本地证据，UI 明确标注 `web_search_status`（`off`/`deepseek-enabled`/`deepseek-unavailable-no-api-key`/`deepseek-request-failed-local-fallback`/`local-web-search`）；
 2. **两种联网通道分离**：`deepseek_web_search`（DeepSeek 服务端工具，配置了 key 才有效）与本地 `web_search_enabled`（DuckDuckGo 适配器）互不依赖——前端"强制联网"只会强制 DeepSeek 工具调用，不代表服务端一定成功（`ARCHITECTURE.md` 已说明此语义）；
-3. DuckDuckGo HTML 解析只有 title+url，`text` 为空（`web_search.py:48-49`）——**网页证据在生成阶段主要靠标题**，正文级网页检索是待增强点。
+3. 本地降级通道会并发读取候选页面并使用 trafilatura 提取正文；静态抓取失败时才调用 Playwright。
 
 ### 2.10 会话记忆（ConversationMemory）
 
@@ -491,7 +503,7 @@ scripts/prepare_cmrc_eval.py + evaluate_routes.py —— CMRC 路线评测 / 三
 4. **假流式**：`answer` 完整生成后才按 28 字符/12ms 推送；首字延迟等于完整延迟。真流式需改造 AnswerGenerator 对接上游 SSE。
 5. **Planner 是规则拆分**：按标点切子问题，无语义规划；`PLANNER_PROMPT`/`SYNTHESIS_PROMPT`（`prompts.py`）定义了但未接线（合成提示词硬编码在 `answerer.py`）。工程上刻意为之（无 key 可跑、可复现）。
 6. **O(N) 兜底扫描**：FTS 零命中补足、HashEmbedding 稠密兜底都是全表遍历——对单机小语料正确，10 万级 chunk 后必须上真索引（第二编 Q20）。
-7. **DuckDuckGo 网页证据只有标题**：`text` 字段恒为空（`web_search.py:48-49`），生成时网页证据信息量有限；`web_search_url` 自建服务可补正文。
+7. **网页正文仍有质量波动**：反爬、登录墙或脚本渲染可能导致正文不足；系统会保留摘要、记录抓取状态并继续使用其他候选。
 8. **相邻父块合并未实现**：跨父块信息断层靠 overlap（220 字）部分缓解；文档明确将"按 position 合并相邻父块 + token 预算"列为增强（旧版 TECHNICAL_DEEP_DIVE 第 10.2 条，本版 Q1 详述做法）。
 9. **web_results 未截断**：生成侧只限 5 条数量，不限长度；长文本网页会膨胀 prompt。
 10. **死代码**：`engine.py:_expand_query`（153-172 行）与 `query.py:_expand` 功能重复，但前者从未被调用（检索走的是 `QuestionProcessor.process` 的展开，`engine.py:105`）——保留为备用实现，面试时可主动指出以展示代码审计能力。

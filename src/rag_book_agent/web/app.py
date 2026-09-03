@@ -480,12 +480,22 @@ def run_langgraph_stream(request: AskRequest) -> StreamingResponse:
 
 
 def summarize_graph_update(update: dict) -> dict:
+    if "evidence_preview" in update:
+        return {"sources": update["evidence_preview"], "budget": update.get("budget", {})}
+    if "next_action" in update:
+        return {"action": update["next_action"], "reason": update.get("routing_reason", "")}
+    if "observation" in update:
+        return {"observation": update["observation"], "step": update.get("step_count", 0)}
     if "plan" in update:
-        return {"sub_questions": len(update["plan"])}
+        return {"sub_questions": len(update["plan"]), "planner": update.get("planner_mode", "rule")}
+    if "lane" in update:
+        return {"lane": update["lane"], "reason": update.get("lane_reason", "")}
+    if "routing_reason" in update:
+        return {"route": update["routing_reason"]}
     if "local_results" in update:
         return {"results": len(update["local_results"])}
     if "web_results" in update:
-        return {"results": len(update["web_results"])}
+        return {"results": len(update["web_results"]), "status": update.get("web_search_status", "")}
     if "answer" in update:
         return {"mode": update["answer"].mode}
     return {"events": len(update.get("trace", []))}

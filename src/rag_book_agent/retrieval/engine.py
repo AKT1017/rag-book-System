@@ -133,10 +133,6 @@ class HybridRetriever:
         for chunk_id in fused_ids:
             row = candidates[chunk_id]
             chunk = self._row_to_chunk(row)
-            if chunk.parent_id:
-                parent = self.storage.get_chunk(chunk.parent_id)
-                if parent is not None:
-                    chunk.text = parent["text"]
             result = SearchResult(
                 chunk=chunk,
                 document_title=row["document_title"],
@@ -150,6 +146,12 @@ class HybridRetriever:
 
         results.sort(key=lambda item: (item.rerank_score, item.fusion_score), reverse=True)
         final = results[:limit]
+        # Parent expansion happens only after child reranking, avoiding reranker truncation.
+        for result in final:
+            if result.chunk.parent_id:
+                parent = self.storage.get_chunk(result.chunk.parent_id)
+                if parent is not None:
+                    result.chunk.text = parent["text"]
         self.last_trace = {
             "query": question,
             "retrieval_query": retrieval_question,

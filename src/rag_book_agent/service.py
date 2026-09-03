@@ -31,7 +31,7 @@ class RagService:
             rrf_k=settings.rrf_k,
         )
         self.generator = AnswerGenerator(settings)
-        self.web_search = WebSearch(settings)
+        self.web_search = WebSearch(settings, reranker=self.retriever.reranker)
         self.last_trace_id = 0
 
     def close(self) -> None:
